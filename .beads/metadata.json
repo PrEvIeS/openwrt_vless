@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "openwrt_script",
+  "project_id": "d7261d8d-1c10-4be5-8563-6674269d63ac"
+}

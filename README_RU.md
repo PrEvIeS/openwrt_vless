@@ -1,23 +1,22 @@
 # OpenWrt Mihomo Gateway — установщик
 
-Интерактивный установщик для роутера на **OpenWrt 25.12.2** (любая
-архитектура, поддерживаемая nikki и zapret — allowlist в `install.sh`),
-разворачивающий трёхслойный шлюз. Работает на всех архитектурах из
-`SUPPORTED_ARCHES` (MIPS / aarch64 / arm / x86_64 / i386):
+Транспарентный шлюз для OpenWrt 24.10.x / 25.04 / 25.12.x. Пакетный
+менеджер (`opkg` на 24.10.x, `apk` на 25.x) детектится автоматически.
+EN-вариант: [README.md](README.md).
 
-- **mihomo** (через пакет `nikki` + `luci-app-nikki`) — VLESS + Reality транспорт
-  для заблокированных в РФ ресурсов, fake-IP DNS, правилам на `ru-blocked.list`
-- **zapret** (через дистрибутив remittor) — DPI-обход для YouTube/SmartTV
-  **без VPN** (нормальный пинг, прямая маршрутизация)
-- **AdGuard Home** — фильтрация рекламы/трекеров/телеметрии для всей LAN
-- **DNS interception** (firewall DNAT :53) — принудительный DNS для SmartTV
-  и прочих устройств, которые пытаются использовать сторонние резолверы
+Состав:
+
+- **mihomo** (пакеты `nikki` + `luci-app-nikki`) — VLESS+Reality транспорт, fake-IP DNS, маршрутизация по правилам (`ru-blocked.list` от runetfreedom).
+- **zapret** (дистрибутив remittor) — DPI-обход для YouTube/SmartTV без VPN, прямая маршрутизация.
+- **AdGuard Home** — фильтрация рекламы/трекеров/телеметрии для LAN, DoH-апстримы.
+- **Force DNS** — firewall DNAT `lan:53 → LAN_IP:53`, перехват DNS у устройств с hardcoded-резолверами.
 
 Итоговая маршрутизация:
-- `*.ru / *.рф / *.su / GEOIP,RU` → **DIRECT**
+
+- `*.ru` / `*.рф` / `*.su` / `GEOIP,RU` → **DIRECT**
 - YouTube и его CDN → **DIRECT + zapret DPI-bypass**
-- `ru-blocked.list` (runetfreedom) → **VLESS-Reality → VPS**
-- Всё остальное → **FINAL** (по умолчанию VLESS, перекидывается в LuCI)
+- `ru-blocked.list` → **VLESS-Reality → VPS**
+- Остальное → **FINAL** (по умолчанию VLESS, меняется в LuCI)
 
 ---
 
@@ -25,70 +24,86 @@
 
 | Параметр | Значение |
 |---|---|
-| OpenWrt | **строго 25.12.2** (проверяется pre-flight'ом) |
-| Архитектура | любая из `SUPPORTED_ARCHES`: `mipsel_24kc`, `aarch64_cortex-a53/-a72/-generic`, `arm_cortex-a7/-a7_neon-vfpv4/-a9/-a15_neon-vfpv4`, `x86_64`, `i386_pentium4`, `i386_pentium-mmx`. Список поддержан апстримами nikki+zapret |
-| Пакетник | **только `apk`** (не `opkg`) |
-| RAM | ≥ 200 MB (на роутерах с 256 MB стек работает впритык) |
-| extroot | **обязателен** — `/overlay` на ext4-разделе USB/SD/NVMe, ≥ 2 ГБ |
-| swap | **обязателен** — активный swap ≥ 1 ГБ (рекомендуется 1.5 ГБ) |
-| Флешка | 32 ГБ USB 3.0, надёжного бренда (SanDisk Ultra, Samsung Fit и т. п.) |
-| VLESS-сервер | поднят; URL формата `vless://UUID@host:port?type=tcp&security=reality&pbk=...&sni=...&sid=...&flow=xtls-rprx-vision&fp=chrome#label` |
+| OpenWrt | релиз из `SUPPORTED_RELEASES` (по умолчанию: `24.10.0 24.10.1 24.10.2 25.04.0 25.12.0 25.12.1 25.12.2`). Расширение: `SUPPORTED_RELEASES="25.12.3" sh install.sh` |
+| Архитектура | `mipsel_24kc`, `mips_24kc`, `aarch64_cortex-a53/-a72/-generic`, `arm_cortex-a7/-a7_neon-vfpv4/-a9/-a9_vfpv3-d16/-a15_neon-vfpv4`, `x86_64`, `i386_pentium4`, `i386_pentium-mmx`. Env-override: `SUPPORTED_ARCHES="..."` |
+| Пакетник | `apk` (25.x) или `opkg` (24.10.x), детект автоматический |
+| RAM | ≥ 200 MB (на 256 MB стек работает впритык) |
+| extroot | `/overlay` на ext4-разделе USB/SD/NVMe, ≥ 2 GiB |
+| swap | активный swap ≥ 1 GiB (рекомендуется 1.5 GiB) |
+| VLESS | URL `vless://UUID@host:port?type=tcp&security=reality&pbk=...&sni=...&sid=...&flow=xtls-rprx-vision&fp=chrome#label` |
 | Интернет | работающий WAN на роутере |
 | Доступ | root SSH |
 
-**Несоответствия preflight'а → exit 2, без мутаций.** Никакого `--force`
-escape-hatch'а. Архитектура не хардкодится — проверяется против allowlist'а;
-фактические `.apk`-пакеты nikki и zapret скачают сами через свои
-инсталляционные скрипты (они детектят `DISTRIB_ARCH` автоматически).
+Несоответствия preflight'а → exit 2, без мутаций. `--force`-escape нет.
+Фактические пакеты nikki/zapret скачивают сами по `DISTRIB_ARCH` и
+пакетнику — installer только валидирует allowlist.
 
 ---
 
-## Что сделать ДО запуска (вручную)
+## Формат VLESS URL
 
-Установщик **не выполняет** подготовку роутера — только слой сервисов поверх
-чистого extroot. Перед запуском:
+```
+vless://UUID@host:port?type=tcp&security=reality&pbk=PUBKEY&sni=SNI&sid=HEX&flow=xtls-rprx-vision&fp=chrome#label
+```
 
-### 1. Прошивка OpenWrt 25.12.2
+| Поле | Обязательность | Валидация | Дефолт (если нет в URL) |
+|---|---|---|---|
+| `UUID` | обяз. | `[A-Za-z0-9-]` | — |
+| `host` | обяз. | `[A-Za-z0-9.:_-]` | — |
+| `port` | опц. | 1..65535 | 443 |
+| `pbk` | обяз. | base64url `[A-Za-z0-9_-]` | — |
+| `sid` | обяз. | hex | — |
+| `sni` | опц. | домен | `www.google.com` |
+| `flow` | опц. | `[A-Za-z0-9._-]` | `xtls-rprx-vision` |
+| `fp` | опц. | `[A-Za-z0-9._-]` | `chrome` |
+| `type` | опц. | tcp (другое — warn) | `tcp` |
+| `security` | опц. | только `reality` | `reality` |
+| `#fragment` | — | игнорируется | — |
 
-1. Идёте на <https://firmware-selector.openwrt.org/>, ищете модель вашего
-   роутера, скачиваете **factory-образ** (первая прошивка должна быть
-   factory, не sysupgrade).
-2. Заходите в стоковый веб-интерфейс роутера (`192.168.1.1`, пароль на
-   наклейке), System Tools → Upgrade → выбираете factory-образ OpenWrt,
-   прошиваете.
-3. После ребута: `192.168.1.1` отвечает LuCI без пароля. Задайте root-пароль.
-4. Проверьте: `cat /etc/openwrt_release` → `DISTRIB_RELEASE='25.12.2'`,
-   `DISTRIB_ARCH` из `SUPPORTED_ARCHES`.
-5. Настройте WAN и Wi-Fi через LuCI.
+Приоритет источников: `--vless-*` override > значение из URL > fallback-default.
 
-### 2. extroot + swap
+---
 
-1. На ПК отформатируйте 32 ГБ флешку в **две партиции**:
-   - `/dev/sda1` — 1.5 ГБ, тип Linux swap
-   - `/dev/sda2` — остальное, ext4
-2. Воткните в USB 3.0 порт роутера, подключитесь по SSH.
-3. Установите драйверы (установщик это сделает повторно, но extroot нужен
-   заранее):
+## Подготовка (до запуска установщика)
+
+Установщик не выполняет прошивку и не настраивает extroot — только ставит
+слой сервисов поверх уже готовой среды.
+
+### 1. Прошить OpenWrt
+
+1. На <https://firmware-selector.openwrt.org/> выбрать модель, скачать **factory**-образ.
+2. Прошить через стоковый web-интерфейс (System Tools → Upgrade).
+3. После ребута открыть LuCI на `192.168.1.1`, задать root-пароль.
+4. Проверить: `cat /etc/openwrt_release` → `DISTRIB_RELEASE` из `SUPPORTED_RELEASES`, `DISTRIB_ARCH` из `SUPPORTED_ARCHES`.
+5. Настроить WAN и Wi-Fi.
+
+### 2. Настроить extroot + swap
+
+1. Разметить флешку на две партиции:
+   - `/dev/sda1` — Linux swap, ≥ 1.5 GiB
+   - `/dev/sda2` — ext4, остальное пространство
+2. Подключить в USB-порт роутера, зайти по SSH.
+3. Поставить драйверы:
    ```sh
    apk update
    apk add block-mount e2fsprogs kmod-fs-ext4 kmod-usb-storage kmod-usb-storage-uas kmod-usb3
    block info   # должен показать sda1 (swap) и sda2 (ext4)
    ```
 4. В LuCI → System → Mount Points:
-   - `/dev/sda2` → Enabled, Target **Use as external overlay (/overlay)**
+   - `/dev/sda2` → Enabled, Target = **Use as external overlay (/overlay)**
    - `/dev/sda1` → Swap Enabled
    - Save & Apply → `reboot`
-5. После ребута проверьте:
+5. После ребута проверить:
    ```sh
-   df -h           # /overlay должен быть на sda2 с десятками ГБ
-   free -m         # Swap: ~1500 MB активен
+   df -h      # /overlay на sda2
+   free -m    # Swap активен
    ```
 
-Без этого preflight установщика откажет с `refuse` (exit 2).
+Без этого preflight отдаст `refuse` с exit 2.
 
 ---
 
-## Запуск установщика
+## Установка
 
 ### Интерактивно
 
@@ -97,24 +112,19 @@ wget -O /tmp/install.sh https://raw.githubusercontent.com/PrEvIeS/openwrt_vless/
 sh /tmp/install.sh
 ```
 
-Скрипт попросит **одну** строку — VLESS URL (как выдают панели типа 3x-ui,
-marzban, x-ui и пр.). Парсер сам извлечёт `UUID`, `server`, `port`,
-`public-key`, `short-id`, `sni`, `flow`, `fp`, `network`, `security`.
+Запрашивается только VLESS URL — парсер сам извлекает поля.
 
 ### Non-interactive
 
 ```sh
 sh install.sh --non-interactive \
-    --vless-url 'vless://UUID@your-vps.example.com:443?type=tcp&encryption=none&security=reality&pbk=REALITY_PUBLIC_KEY&fp=chrome&sni=www.google.com&sid=SHORT_ID&spx=%2F&flow=xtls-rprx-vision#label'
+    --vless-url 'vless://UUID@your-vps.example.com:443?type=tcp&security=reality&pbk=PUBKEY&sni=www.google.com&sid=SHORT_ID&flow=xtls-rprx-vision&fp=chrome#label'
 ```
 
 Кавычки обязательны (`&` и `?` — метасимволы шелла). `#fragment` в URL
-игнорируется (это label от панели).
+игнорируется.
 
 ### Override отдельных полей
-
-Если URL задаёт не то значение, что нужно — перезапишите отдельным флагом.
-Приоритет: **override-флаг > URL > fallback-default**.
 
 ```sh
 sh install.sh \
@@ -122,111 +132,97 @@ sh install.sh \
     --vless-sni my.cdn.example.com   # перезапишет sni из URL
 ```
 
-### Полный список флагов
+### CLI-флаги
 
-```
-VLESS:
-  --vless-url URL        основной вход (vless://...)
-
-  override отдельных полей (перезаписывают значения из URL):
-  --vless-server HOST    --vless-port N
-  --vless-uuid UUID      --vless-pubkey KEY (reality pbk)
-  --vless-sid HEX        --vless-sni HOST
-  --vless-flow NAME      --vless-fp NAME
-
-Zapret:
-  --nfqws-opt "..."      стратегия для NFQWS_OPT
-                         (дефолт — стартовая из §5 ниже; может потребовать
-                          blockcheck для вашего провайдера)
-  --no-zapret            не устанавливать zapret
-
-AdGuard Home:
-  --no-adguard           не устанавливать AGH
-  --force-config         перезаписать AdGuardHome.yaml / nikki-profile
-
-Прочее:
-  --no-force-dns         не добавлять firewall-правило Force DNS
-  --no-i18n              не ставить luci-i18n-nikki-ru
-  --non-interactive      die вместо prompt'а при пустом --vless-url
-```
-
-### Fallback-дефолты (если в URL отсутствуют)
-
-| Поле | Default |
+| Флаг | Назначение |
 |---|---|
-| port | 443 |
-| sni | `www.google.com` |
-| flow | `xtls-rprx-vision` |
-| fp | `chrome` |
-| type (network) | `tcp` |
-| security | `reality` (другие значения → die) |
+| `--vless-url URL` | Основной вход. Без флага — промпт (кроме `--non-interactive`). |
+| `--vless-server/port/uuid/pubkey/sid/sni/flow/fp` | Override отдельных полей VLESS. |
+| `--nfqws-opt "..."` | Строка NFQWS_OPT. Дефолт — `DEFAULT_NFQWS_OPT` в `install.sh`. |
+| `--no-zapret` | Не устанавливать zapret. |
+| `--no-adguard` | Не устанавливать AdGuard Home. |
+| `--no-force-dns` | Не добавлять firewall-правило Force DNS. |
+| `--no-i18n` | Не ставить `luci-i18n-nikki-ru`. |
+| `--force-config` | Перезаписать `AdGuardHome.yaml`, nikki-профиль, snapshot. **Сбрасывает `bind_port: 3000` в AGH** — если после первой установки admin был перенесён на `:8080` через wizard, после `--force-config` wizard снова поднимется на `:3000`. |
+| `--non-interactive` | Не промптить; без `--vless-url` или override'ов — die. |
+| `-h`, `--help` | Справка. |
+| env `SUPPORTED_RELEASES` / `SUPPORTED_ARCHES` | Расширить allowlist'ы. |
+
+`--no-adguard` требует явного `--no-force-dns`. Force DNS — DNAT `lan:53 → LAN_IP:53`; без AGH на `LAN_IP:53` никто не слушает (dnsmasq на `:54`, mihomo на `:1053`), DNS у клиентов сломается. Preflight отдаёт `refuse` (exit 2) при такой комбинации.
 
 ---
 
 ## Что делает установщик (12 шагов)
 
-1. **Preflight release + arch** — `DISTRIB_RELEASE=25.12.2` обязательно;
-   `DISTRIB_ARCH` ∈ `SUPPORTED_ARCHES` (allowlist nikki+zapret). Детектированные
-   `DETECTED_ARCH` и `DETECTED_TARGET` печатаются в итоговом summary.
-2. **Preflight extroot** — `/overlay` на `/dev/sd*p*`, `/dev/mmcblk*p*` или
-   `/dev/nvme*p*` ≥ 2 ГБ + активный swap ≥ 1 ГБ.
-3. **Preflight conflicts** — нет xray/sing-box/passwall/podkop; LAN = `br-lan`;
-   `:53` держит либо `dnsmasq`, либо никто; есть интернет.
-4. **Сбор VLESS URL → парсинг → валидация** — `vless://UUID@host:port?...#label`
-   → поля `server/port/uuid/pbk/sid/sni/flow/fp/network/security`. Приоритет:
-   override-флаг > URL > fallback-default. Валидация каждого поля строгая
-   (защита от YAML-injection в профиль mihomo).
-5. **Snapshot state** — `snapshot.env` (UCI-значения для symbolic restore)
-   + копии `/etc/config/{network,dhcp,firewall}` + nftables ruleset + crontab,
-   всё в `/root/openwrt-mihomo-backup/` (chmod 700).
-6. **apk add** базовые — `curl ca-bundle block-mount e2fsprogs kmod-*`.
-7. **nikki** — скачиваем feed.sh от `nikkinikki-org/OpenWrt-nikki`, добавляем
-   репозиторий, ставим `nikki luci-app-nikki luci-i18n-nikki-ru`.
-8. **zapret** — запускаем `update-pkg.sh` от remittor, ставим `zapret` +
-   `luci-app-zapret` под `mipsel_24kc`.
+1. **Preflight release + arch** — `DISTRIB_RELEASE` ∈ `SUPPORTED_RELEASES`, `DISTRIB_ARCH` ∈ `SUPPORTED_ARCHES`, детект пакетника.
+2. **Preflight extroot** — `/overlay` на USB/SD/NVMe ≥ 2 GiB + активный swap ≥ 1 GiB.
+3. **Preflight conflicts** — нет xray/sing-box/passwall/podkop; LAN = `br-lan`; `:53` у dnsmasq либо свободен; WAN работает.
+4. **Сбор и разбор VLESS URL** — парсинг в поля, валидация каждого поля по строгому allowlist'у (защита от YAML-injection в профиль mihomo).
+5. **Snapshot state** — `snapshot.env` (UCI-значения для symbolic restore) + копии `/etc/config/{network,dhcp,firewall}` + nftables ruleset + crontab, всё в `/root/openwrt-mihomo-backup/` с `chmod 700` (содержит старые значения DNS/DHCP, не должно быть readable от `nobody`).
+6. **Установка базовых пакетов** — `curl ca-bundle block-mount e2fsprogs kmod-fs-ext4 kmod-usb-storage kmod-usb-storage-uas kmod-usb3`.
+7. **nikki (mihomo)** — скачивание `feed.sh` от `nikkinikki-org/OpenWrt-nikki`, добавление репозитория, установка `nikki`, `luci-app-nikki`, при необходимости `luci-i18n-nikki-ru`.
+8. **zapret** — запуск `update-pkg.sh` от `remittor/zapret-openwrt`, установка `zapret` и `luci-app-zapret`.
 9. **AdGuard Home** — `apk add adguardhome`, workdir = `/opt/adguardhome`.
 10. **Конфигурация**:
-    - генерация `/etc/nikki/run/profiles/main.yaml` с VLESS-параметрами,
-      fake-ip DNS на `:1053`, правилами RU→DIRECT + YouTube→YOUTUBE +
-      `ru-blocked.list` (runetfreedom) → PROXY
-    - UCI `nikki.config.enabled=1`, `mode=redir_tun`
-    - UCI `zapret.config` — `mode=nfqws`, `mode_filter=hostlist`,
-      `nfqws_tcp_port=80,443`, `nfqws_udp_port=443`, `disable_ipv6=1`,
-      `nfqws_opt=<стратегия>`
-    - `/opt/zapret/ipset/zapret-hosts-user.txt` — 10 YouTube-доменов
-    - dnsmasq → `:54`, dhcp.lan.dhcp_option = `[3,$LAN_IP]`, `[6,$LAN_IP]`,
-      `[15,lan]`, `expandhosts=1`, `cachesize=0`, `noresolv=1`
-    - `/opt/adguardhome/AdGuardHome.yaml` — пре-сидированный конфиг
-      (upstreams: `[/lan/]127.0.0.1:54`, `[/pool.ntp.org/]1.1.1.1/1.0.0.1`,
-      `127.0.0.1:1053`; bootstrap `1.1.1.1 8.8.8.8`; фильтры
-      `AdGuard DNS filter`, `AdGuard Russian filter`,
-      `HaGeZi Encrypted DNS/VPN/TOR/Proxy Bypass`; retention 24h/720h;
-      `users: []` — пароль задаёт мастер)
-    - firewall redirect `Force DNS`: `lan:53 → $LAN_IP:53 (tcpudp)`
-11. **Service order fix + enable + start** — `S50nikki → S60adguardhome →
-    S99zapret`.
-12. **Self-test** — pidof каждого демона, наличие сокетов `:53 :54 :1053 :3000
-    :9090`, наличие firewall-правила.
-
-**После успешного selftest'а** — напечатается инструкция: открыть
-`http://LAN_IP:3000` (мастер AGH для пароля) + при необходимости запустить
-`/opt/zapret/blockcheck.sh` для подбора NFQWS-стратегии под вашего провайдера.
+    - `/etc/nikki/run/profiles/main.yaml` — VLESS-параметры, fake-IP DNS на `:1053`, правила RU→DIRECT + YouTube→YOUTUBE + `ru-blocked.list`→PROXY.
+    - UCI `nikki.config`: `enabled=1`, `mode=redir_tun`.
+    - UCI `zapret.config`: `mode=nfqws`, `mode_filter=hostlist`, `nfqws_tcp_port=80,443`, `nfqws_udp_port=443`, `disable_ipv6=1`, `nfqws_opt=<стратегия>`.
+    - `/opt/zapret/ipset/zapret-hosts-user.txt` — 10 YouTube-доменов.
+    - dnsmasq → `:54`, `cachesize=0`, `noresolv=1`, `expandhosts=1`. DHCP: `option 3,$LAN_IP`, `option 6,$LAN_IP`, `option 15,lan`.
+    - `/opt/adguardhome/AdGuardHome.yaml` — пре-сид: upstreams `[/lan/]127.0.0.1:54`, `[/pool.ntp.org/]1.1.1.1/1.0.0.1`, `127.0.0.1:1053`; bootstrap `1.1.1.1 8.8.8.8`; фильтры AdGuard DNS / AdGuard Russian / HaGeZi Encrypted DNS-VPN-Proxy-Bypass; retention 24h/720h; `users: []` (пароль задаётся через wizard, bcrypt в BusyBox отсутствует).
+    - Firewall redirect `Force DNS`: `lan:53 → $LAN_IP:53 (tcpudp)`.
+11. **Порядок служб + enable + start** — `S50nikki → S60adguardhome → S99zapret`. nikki раньше AGH, чтобы AGH `:53 → mihomo :1053` был доступен при первом запросе. zapret — последним.
+12. **Self-test** — `pidof` каждого демона, проверка сокетов `:53 :54 :1053 :3000 :9090`, наличие firewall-правила. FAIL → exit 1, state остаётся, откат через `uninstall.sh`.
 
 ---
 
-## Ручные шаги после установки
+## Файлы и места изменений
+
+| Путь | Что содержит | В snapshot? | Восстанавливается `uninstall.sh`? |
+|---|---|---|---|
+| `/etc/config/dhcp` | dnsmasq-порт, DHCP-option'ы, upstream'ы | да (UCI symbolic) | да |
+| `/etc/config/firewall` | redirect `Force DNS` | да (файл копируется) | правило `Force DNS` удаляется |
+| `/etc/config/nikki` | `enabled`, `profile`, `mode` | нет | `enabled=0` |
+| `/etc/config/zapret` | `mode`, `nfqws_opt`, порты | нет | `enabled=0` |
+| `/etc/config/adguardhome` | `workdir` | нет | `enabled=0` |
+| `/etc/config/network` | копия для отката | да (файл копируется) | не перезаписывается автоматически |
+| `/etc/hosts` | копия для отката | да | не перезаписывается автоматически |
+| `/etc/nikki/run/profiles/main.yaml` | VLESS-профиль | нет | с `--remove-state` |
+| `/opt/adguardhome/AdGuardHome.yaml` | конфиг AGH | нет | с `--remove-state` |
+| `/opt/zapret/ipset/zapret-hosts-user.txt` | YouTube-домены | нет | с `--remove-state` |
+| `/etc/rc.d/S{50nikki,60adguardhome,99zapret}` | порядок автозапуска | нет | удаляются (stop+disable) |
+| `/root/openwrt-mihomo-backup/` | snapshot + копии конфигов + nftables + crontab | — | не удаляется |
+
+---
+
+## Порты и сервисы
+
+| Порт | Слушает | Назначение |
+|---|---|---|
+| `:53/tcpudp` | AdGuard Home | DNS для LAN, upstream → mihomo :1053 или dnsmasq :54 |
+| `:54/tcpudp` | dnsmasq | Только `.lan`, cache=0, noresolv=1 |
+| `:1053/tcpudp` | mihomo | fake-IP DNS для правил mihomo |
+| `:3000/tcp` | AdGuard Home | Admin wizard (до первого логина) |
+| `:8080/tcp` | AdGuard Home | Admin (после переноса в wizard'е) |
+| `:9090/tcp` | mihomo | external-controller (используется LuCI → Nikki) |
+| `:7890/tcp` | mihomo | mixed-port (SOCKS/HTTP) |
+| `:7891/tcp` | mihomo | tproxy-port |
+| `:7892/tcp` | mihomo | redir-port |
+| `:80/tcp` | uhttpd (LuCI) | Управление роутером |
+
+---
+
+## Пост-установка
 
 ### AGH wizard (обязательно — пароль)
 
-`http://LAN_IP:3000` →
+Открыть `http://LAN_IP:3000`:
 
-- Admin Web Interface: LAN_IP, port **8080**
-- DNS Server: All interfaces, port **53**
-- Логин/пароль — придумайте крепкий. **Пароль не сохраняется** никем кроме
-  вас (bcrypt в BusyBox нет — автосеять не можем).
+- Admin Web Interface: LAN_IP, port **8080**.
+- DNS Server: All interfaces, port **53**.
+- Логин/пароль — задать вручную (bcrypt-генерация в BusyBox отсутствует, автосеять нельзя).
 
-Проверьте `Settings → DNS Settings`: upstreams уже пре-сидированы, но если
-что, порядок должен быть:
+Проверить `Settings → DNS Settings`: upstreams уже пре-сидированы, порядок:
 
 ```
 [/lan/]127.0.0.1:54
@@ -235,59 +231,88 @@ AdGuard Home:
 127.0.0.1:1053
 ```
 
-### blockcheck (если YouTube тормозит)
+### blockcheck для zapret
 
-Дефолтная NFQWS-стратегия — `--dpi-desync=fake,multisplit` + QUIC-fake
-(см. `DEFAULT_NFQWS_OPT` в `install.sh`). У некоторых провайдеров нужна
-другая. Проверка:
+Дефолтная NFQWS-стратегия — `fake,multisplit` + QUIC-fake. У части
+провайдеров нужна другая:
 
 ```sh
 service zapret stop
 /opt/zapret/blockcheck.sh
 ```
 
-Выбор: `https + quic`, level=`standard`, curl-mode=`curl`, target=`youtube.com`.
-10–20 минут → скопируйте лучшую стратегию → обновите `NFQWS_OPT` в LuCI →
-Services → Zapret → Settings.
+Параметры: `https + quic`, level=`standard`, curl-mode=`curl`,
+target=`youtube.com`. По результатам скопировать лучшую стратегию в
+LuCI → Services → Zapret → Settings → `NFQWS_OPT`.
 
 ---
 
-## Проверка (после установки)
+## Проверка работы
 
 ```sh
 # на роутере
 ping 1.1.1.1
-free -m                     # swap активен
-df -h                       # overlay на USB
+free -m                             # swap активен
+df -h                               # /overlay на USB
 
-# с клиента в LAN
-nslookup youtube.com LAN_IP     # → fake-IP 198.18.x.x = mihomo отработал
-nslookup yandex.ru LAN_IP       # → реальный IP (yandex DoH)
-nslookup doubleclick.net LAN_IP # → 0.0.0.0 (AGH заблокировал)
+# с клиента LAN
+nslookup youtube.com LAN_IP         # fake-IP 198.18.x.x — mihomo отработал
+nslookup yandex.ru LAN_IP           # реальный IP (yandex DoH)
+nslookup doubleclick.net LAN_IP     # 0.0.0.0 — AGH заблокировал
 
 # с клиента (браузер)
-https://ifconfig.me             # → IP VPS (VLESS работает)
-https://yandex.ru/internet      # → ваш домашний IP (RU напрямую)
-https://www.youtube.com         # → открывается без замедления
+https://ifconfig.me                 # IP VPS — VLESS работает
+https://yandex.ru/internet          # домашний IP — RU напрямую
+https://www.youtube.com             # открывается, без деградации
 ```
 
 ---
 
-## Удаление
+## Архитектура
 
-```sh
-sh uninstall.sh                                          # минимум — stop + UCI-restore
-sh uninstall.sh --remove-packages --remove-state         # полная очистка пакетов и /opt
-sh uninstall.sh --restore-crontab                        # вернуть crontab из snapshot
+```
+[клиенты LAN, включая Smart TV]
+    │  (Wi-Fi / Ethernet)
+    ▼
+┌─────────────────────────────────────────┐
+│  OpenWrt                                │
+├─────────────────────────────────────────┤
+│  DNS:                                   │
+│  ├─ firewall DNAT :53  (принудительно)  │
+│  ├─ AGH        :53     (фильтр + лог)   │
+│  ├─ mihomo     :1053   (fake-IP + rules)│
+│  └─ dnsmasq    :54     (только .lan)    │
+│                                         │
+│  Трафик:                                │
+│  ├─ mihomo TProxy → DIRECT или VPS      │
+│  ├─ VLESS-Reality → VPS (blocked)       │
+│  └─ zapret nfqws  → DPI-обход YouTube   │
+│                                         │
+│  Управление:                            │
+│  ├─ LuCI        :80                     │
+│  ├─ AGH UI      :8080                   │
+│  └─ mihomo UI   через LuCI → Nikki      │
+└─────────────────────────────────────────┘
+    │
+    ▼
+[WAN → провайдер]
+    ├── напрямую: RU-трафик + YouTube (zapret)
+    └── через VPS: заблокированные в РФ
 ```
 
-- UCI-значения восстанавливаются **символьно** из `snapshot.env`
-  (не перезаписываются файлы конфигурации — чтобы не затереть правки,
-  сделанные пользователем после установки).
-- `/overlay` и swap **не трогаются** никогда.
-- Прошивка OpenWrt не откатывается — для возврата на стоковую прошивку
-  используйте U-Boot web recovery вашего роутера (обычно `http://192.168.1.1/`
-  после reset+power), если он это поддерживает.
+---
+
+## Типовые проблемы
+
+| Симптом | Диагностика / решение |
+|---|---|
+| DNS не резолвит ничего | `logread \| grep -E 'AdGuard\|nikki'`. `:53` слушается? `ss -lntu \| grep ':53'`. Force DNS на месте? `uci show firewall \| grep "Force DNS"` |
+| mihomo не стартует после ребута | `logread \| grep nikki`. Обычно YAML-ошибка в `/etc/nikki/run/profiles/main.yaml` → править в LuCI → Nikki → Profile Editor |
+| YouTube работает в браузере, не на SmartTV | DNS-interception включён? QUIC в `NFQWS_OPT`? IPv6 отключён на LAN? `cat /sys/module/ipv6/parameters/disable` |
+| Госуслуги/банки не работают через zapret | `mode_filter=hostlist` обязателен — zapret режет TLS только хостам из `zapret-hosts-user.txt`. Проверить `uci get zapret.config.mode_filter` |
+| Конфликт на :53 | `ss -lntp \| grep ':53'`. Ожидается только AdGuardHome. Если dnsmasq — migrate_dnsmasq_to_agh не отработала, проверить `uci get dhcp.@dnsmasq[0].port` = 54 |
+| RAM ≥ 90% | Отключить лишние блоклисты AGH, уменьшить retention querylog, `--no-i18n` при переустановке. На 256 MB держать 3–4 блоклиста максимум |
+| VLESS медленный | CPU-потолок слабых SoC (MT7621 и аналоги) — 70–80 Мбит/с через VLESS-Reality. Решение — роутер помощнее (aarch64 / x86_64) |
 
 ---
 
@@ -296,67 +321,39 @@ sh uninstall.sh --restore-crontab                        # вернуть cronta
 | Exit | Когда | Что делать |
 |---|---|---|
 | 0 | self-test пройден | — |
-| 2 | preflight отказ (release / extroot / conflicts / VLESS-params) | исправить среду по сообщению, запустить снова |
-| 1 | ошибка после начала мутаций (snapshot создан) | `sh uninstall.sh`, разобраться в причине |
+| 2 | preflight отказ (release / arch / pkg / extroot / conflicts / VLESS URL) | исправить среду по сообщению, перезапустить |
+| 1 | ошибка после начала мутаций (snapshot создан) | `sh uninstall.sh`, разобраться |
 
-Никакого auto-rollback, никаких retry, никаких `--force`. Preflight
-refuse — симметрично self-test'у: одна и та же строгость на входе и
-выходе. Откат — только через отдельный `uninstall.sh`.
+Никакого auto-rollback и retry. Откат — только через `uninstall.sh`.
 
 ---
 
-## Архитектура (DNS + трафик)
+## Удаление
 
-```
-[Клиенты LAN, включая Smart TV]
-    │  (Wi-Fi / Ethernet)
-    ▼
-┌─────────────────────────────────────────┐
-│  OpenWrt 25.12.2 router                 │
-├─────────────────────────────────────────┤
-│                                         │
-│  DNS:                                   │
-│  ├─ firewall DNAT :53  (принудительно)  │
-│  ├─ AGH        :53     (фильтр + лог)   │
-│  ├─ mihomo     :1053   (fake-ip + rules)│
-│  └─ dnsmasq    :54     (только .lan)    │
-│                                         │
-│  Трафик:                                │
-│  ├─ mihomo TProxy → DIRECT или VPN      │
-│  ├─ VLESS-Reality → VPS (blocked)       │
-│  └─ zapret nfqws → DPI-обход YouTube    │
-│                                         │
-│  Управление:                            │
-│  ├─ LuCI        :80                     │
-│  ├─ AGH UI      :8080                   │
-│  └─ mihomo UI   через LuCI → Nikki      │
-│                                         │
-└─────────────────────────────────────────┘
-    │
-    ▼
-[WAN → провайдер]
-    │
-    ├── напрямую: RU-трафик + YouTube (через zapret)
-    └── через VPS: заблокированные в РФ
+```sh
+sh uninstall.sh                                                  # stop + UCI restore
+sh uninstall.sh --remove-packages --remove-state --purge-config  # полная очистка
+sh uninstall.sh --restore-crontab                                # crontab из snapshot
 ```
 
----
+| Действие | Default | С флагом |
+|---|---|---|
+| Stop + disable `nikki / adguardhome / zapret`, снятие rc.d-симлинков | да | — |
+| Удаление firewall-правила `Force DNS` | да | — |
+| Symbolic UCI restore из `snapshot.env` (dnsmasq :54→:53, DHCP options, lan.dns) | да | — |
+| UCI секции `/etc/config/{nikki,zapret,adguardhome}` | `enabled=0` | `--purge-config` → `rm` |
+| Удаление пакетов `nikki / zapret / adguardhome` | нет | `--remove-packages` |
+| Удаление `/etc/nikki`, `/opt/adguardhome`, `/opt/zapret` | нет | `--remove-state` |
+| crontab | не трогается | `--restore-crontab` → из snapshot |
+| extroot, swap, прошивка | не трогаются | — |
 
-## Типовые проблемы
+UCI восстанавливается **символьно** — файлы конфигурации не перезаписываются, правки пользователя после установки сохраняются. `install.sh` свой crontab не модифицирует, поэтому default — cron не трогать.
 
-| Симптом | Причина / решение |
-|---|---|
-| `mihomo` не стартует после ребута | `logread \| grep nikki`. Обычно YAML-ошибка в `/etc/nikki/run/profiles/main.yaml` — правьте через LuCI → Nikki → Profile Editor (там подсветка) |
-| YouTube работает в браузере, не на SmartTV | DNS interception включён? (`uci show firewall \| grep "Force DNS"`). QUIC в NFQWS_OPT? IPv6 отключён на LAN? |
-| Госуслуги/банки не работают | `mode_filter=hostlist` обязателен — zapret режет TLS только хостам из `zapret-hosts-user.txt`. Проверь `uci get zapret.config.mode_filter` |
-| RAM ≥ 90% | Откл. лишние блоклисты в AGH, retention query log меньше, `--no-i18n` при переустановке. На роутерах с 256 MB RAM — держитесь 3-4 блоклистов максимум |
-| VLESS медленный | CPU-потолок слабого SoC (MT7621 и родственники) ~70-80 Мбит/с через VLESS-Reality. Это упирается в железо; для больших скоростей нужен роутер помощнее (aarch64 / x86_64) |
-
-Full troubleshooting — в комментариях `install.sh` и логах `/var/log/`.
+Прошивка не откатывается — для возврата на сток использовать U-Boot web recovery роутера, если поддерживается.
 
 ---
 
 ## Лицензия
 
-Скрипты — MIT. Сторонние пакеты — по лицензиям своих проектов
-(mihomo/nikki/zapret/AdGuardHome).
+Скрипты — MIT. Сторонние пакеты — по своим лицензиям (mihomo / nikki /
+zapret / AdGuard Home).

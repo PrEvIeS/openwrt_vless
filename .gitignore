@@ -9,15 +9,16 @@
 .DS_Store
 Thumbs.db
 
-# Local tool state (oh-my-claudecode, claude code, veai) — fully ignored
+# Local tool state
 .claude/
 .omc/
 .veai/
 
-# Reference repos cloned locally for inspiration
-refs/
+# Local secrets
+.env
+.env.local
 
-# Build / test artifacts
+# Artifacts
 *.log
 *.tmp
 *.bak
@@ -25,9 +26,17 @@ refs/
 *.rej
 /tmp/
 
-# Shell / POSIX leftovers
+# Shell swap
 .sh.swp
 
-# Editor temporary
+# Editor temporaries
 \#*\#
 .\#*
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Local reference clones (mihomo-proxy-ros, rulesets, etc.)
+refs/
