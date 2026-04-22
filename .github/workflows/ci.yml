@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck -s sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck install.sh + uninstall.sh
+        run: |
+          shellcheck --version
+          shellcheck -s sh install.sh uninstall.sh
+
+  syntax:
+    name: sh -n syntax smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: sh -n (BusyBox-compatible)
+        # dash is the closest POSIX-strict shell available on GH runners.
+        # Matches the target: OpenWrt ash via BusyBox.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dash
+          dash -n install.sh
+          dash -n uninstall.sh
+          sh -n install.sh
+          sh -n uninstall.sh
