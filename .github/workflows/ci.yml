@@ -35,3 +35,16 @@ jobs:
           dash -n uninstall.sh
           sh -n install.sh
           sh -n uninstall.sh
+
+  fixtures:
+    name: VLESS URL parser fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run tests/test_vless_url.sh
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dash
+          sh tests/test_vless_url.sh
+          # Re-run under dash to catch any bashisms in the runner.
+          dash tests/test_vless_url.sh

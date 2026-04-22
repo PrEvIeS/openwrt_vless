@@ -1,0 +1,1 @@
+vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@1.2.3.4:8443?type=tcp&security=reality&pbk=KEY2&sni=cloudflare.com&sid=CAFE1234&flow=xtls-rprx-vision&fp=chrome

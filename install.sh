@@ -1156,4 +1156,9 @@ main() {
     print_summary
 }
 
-main "$@"
+# Gate entry point so the script can be sourced by the fixture test runner
+# (tests/test_vless_url.sh) without executing the pipeline. The quick-start
+# wget flow is unaffected — INSTALL_SH_TEST_MODE is unset there.
+if [ "${INSTALL_SH_TEST_MODE:-0}" != "1" ]; then
+    main "$@"
+fi

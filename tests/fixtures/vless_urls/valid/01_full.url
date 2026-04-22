@@ -1,0 +1,1 @@
+vless://11111111-2222-3333-4444-555555555555@example.com:443?type=tcp&security=reality&pbk=PUBKEY123&sni=www.google.com&sid=DEADBEEF&flow=xtls-rprx-vision&fp=chrome#label-ok

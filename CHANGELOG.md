@@ -23,11 +23,18 @@ Entries are written by hand per release tag. No commit-message autogeneration.
 - `docs/TROUBLESHOOTING.md` — cheatsheet for preflight refuses, `:53`
   conflicts, YouTube lag, AGH wizard port collision, mihomo boot failures.
 - `.github/ISSUE_TEMPLATE/` and `.github/PULL_REQUEST_TEMPLATE.md`.
+- `.github/workflows/ci.yml` — `shellcheck -s sh`, dash/sh `-n` syntax
+  smoke, and VLESS URL parser fixture tests on push + PR.
+- `tests/test_vless_url.sh` + `tests/fixtures/vless_urls/{valid,broken}/` —
+  fixture-based tests for `parse_vless_url()` (4 valid + 4 broken cases).
 - `.beads/` — issue tracker config and hooks.
 - `AGENTS.md`, `CLAUDE.md` — agent onboarding and beads workflow notes.
 
 ### Changed
 - `.gitignore`: exclude `refs/` (local reference clones).
+- `install.sh`: gate `main "$@"` behind `INSTALL_SH_TEST_MODE` so the
+  script can be sourced by the test runner without executing the pipeline.
+  Quick-start wget flow is unaffected (env var unset by default).
 
 ### Fixed
 - `uninstall.sh`: `stop_cron` no-op when `# mihomo-gateway` marker absent;

@@ -1,0 +1,5 @@
+VLESS_UUID=dddddddd-dddd-dddd-dddd-dddddddddddd
+VLESS_SERVER=srv.tld
+VLESS_PORT=443
+VLESS_PUBKEY=PK4
+VLESS_SID=FEED

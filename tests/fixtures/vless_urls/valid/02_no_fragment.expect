@@ -1,0 +1,6 @@
+VLESS_UUID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+VLESS_SERVER=1.2.3.4
+VLESS_PORT=8443
+VLESS_PUBKEY=KEY2
+VLESS_SNI=cloudflare.com
+VLESS_SID=CAFE1234

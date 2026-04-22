@@ -1,0 +1,5 @@
+VLESS_UUID=cccccccc-cccc-cccc-cccc-cccccccccccc
+VLESS_SERVER=my.host.tld
+VLESS_PORT=443
+VLESS_SNI=www.example.org
+VLESS_SID=AB12
