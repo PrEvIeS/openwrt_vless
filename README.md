@@ -77,6 +77,20 @@ Override priority: `--vless-*` CLI flag > URL value > fallback default.
 
 ---
 
+## IPv6 behavior
+
+The installer targets **IPv4-only routing**. What this means in practice:
+
+- **mihomo fake-IP** works only for A records. AAAA responses are passed through without fake-IP, so v6 destinations are not matched against the `ru-blocked.list` / YouTube / geoip rules.
+- **zapret** is pinned to `disable_ipv6=1` in UCI, the nfqws hook only inspects v4 traffic.
+- **Force-DNS redirect** is v4 only (`ip nat` DNAT, no ip6nat rule).
+
+Net effect: if a LAN client has working IPv6 to a blocked destination, the browser will prefer v6 (Happy Eyeballs) and **bypass VLESS entirely**. Recommendation: disable IPv6 on the LAN side in LuCI → Network → Interfaces → LAN — set `IPv6 assignment length` to *disabled* and turn off the RA/DHCPv6 services.
+
+A proper `--ipv6 {bypass,drop,route}` policy flag is tracked on the roadmap.
+
+---
+
 ## Failure modes
 
 | Phase | Exit | Behavior |
