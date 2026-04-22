@@ -171,9 +171,36 @@ parse_args() {
 
 # --- VLESS URL parser (BusyBox ash) ---
 _urldecode() {
-    # BusyBox sed не поддерживает \xHH в замене: sed вставляет литеральную
-    # backslash-x форму, printf %b её интерпретирует.
-    printf '%b' "$(printf '%s' "$1" | sed 's/+/ /g; s/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')"
+    # Portable across BusyBox ash and dash.
+    # Previous implementation used `printf '%b' '\xHH'`, which works on
+    # BusyBox ash but NOT on dash (dash's %b only supports octal escapes).
+    # This version converts every %HH via `printf "\NNN"` (octal), which is
+    # portable. '+' → space per application/x-www-form-urlencoded rules.
+    _in=$1
+    _out=
+    while [ -n "$_in" ]; do
+        case "$_in" in
+            '+'*)
+                _out="$_out "
+                _in=${_in#?}
+                ;;
+            %[0-9A-Fa-f][0-9A-Fa-f]*)
+                _hh=${_in#%}
+                _hh=${_hh%"${_hh#??}"}
+                # Intentional: printf format built from variable is the hex
+                # → octal → char conversion trick; no user-controlled format.
+                # shellcheck disable=SC2059
+                _out="$_out$(printf "\\$(printf '%03o' "0x$_hh")")"
+                _in=${_in#???}
+                ;;
+            *)
+                _first=${_in%"${_in#?}"}
+                _out="$_out$_first"
+                _in=${_in#?}
+                ;;
+        esac
+    done
+    printf '%s' "$_out"
 }
 
 _set_if_empty() {

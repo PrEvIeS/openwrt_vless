@@ -1,0 +1,3 @@
+VLESS_SNI=my sni value
+VLESS_SERVER=host.tld
+VLESS_PORT=443
