@@ -1,0 +1,33 @@
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS / OS cruft
+.DS_Store
+Thumbs.db
+
+# Local tool state (oh-my-claudecode, claude code, veai) — fully ignored
+.claude/
+.omc/
+.veai/
+
+# Reference repos cloned locally for inspiration
+refs/
+
+# Build / test artifacts
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+/tmp/
+
+# Shell / POSIX leftovers
+.sh.swp
+
+# Editor temporary
+\#*\#
+.\#*
