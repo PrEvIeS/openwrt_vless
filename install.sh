@@ -17,6 +17,10 @@ AGH_CONF=$AGH_DIR/adguardhome.yaml
 
 ZAPRET_HOSTLIST=/opt/zapret/ipset/zapret-hosts-user.txt
 
+# Per-step state for idempotent re-runs after partial failures.
+# Wiped on --force-config so the user can replay the full pipeline.
+SETUP_STATE_FILE=/etc/openwrt-setup-state
+
 # Tested releases. Extend via env: SUPPORTED_RELEASES="25.12.3" sh install.sh
 SUPPORTED_RELEASES="${SUPPORTED_RELEASES:-24.10.0 24.10.1 24.10.2 25.04.0 25.12.0 25.12.1 25.12.2}"
 MIN_OVERLAY_KB=$((2 * 1024 * 1024))    # 2 GiB
@@ -42,10 +46,23 @@ ZAPRET_INSTALLER_URL='https://raw.githubusercontent.com/remittor/zapret-openwrt/
 NIKKI_GH_API='https://api.github.com/repos/nikkinikki-org/OpenWrt-nikki/releases/latest'
 NIKKI_GH_DL='https://github.com/nikkinikki-org/OpenWrt-nikki/releases/download'
 
-# Starting NFQWS strategy. May need per-ISP tuning via /opt/zapret/blockcheck.sh.
-DEFAULT_NFQWS_OPT='--filter-tcp=80 --dpi-desync=fake,multisplit --dpi-desync-fooling=md5sig <HOSTLIST> --new
---filter-tcp=443 --dpi-desync=fake,multidisorder --dpi-desync-split-pos=1 --dpi-desync-fooling=badseq,md5sig --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin <HOSTLIST> --new
---filter-udp=443 --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin <HOSTLIST>'
+# NFQWS-стратегия: 6 фильтр-секций (--new разделяет их).
+# 1) TCP/443 + Google-hostlist: fake,multisplit с TLS-fake-clienthello (ggpht.com SNI),
+#    split-seqovl=620 — пробивает SNI-фильтрацию на googlevideo/ytimg.
+# 2) TCP/443 + user-hostlist (минус exclude): hostfakesplit с подменой Host: на mapgl.2gis.com,
+#    badseq+badsum fooling — для произвольных DPI-блокировок.
+# 3) TCP/80: fake,multisplit для plain HTTP (без hostlist — на все исходящие).
+# 4) UDP/443 + user-hostlist: fake QUIC с готовым clienthello-бином из /opt/zapret/files/fake/.
+# 5) UDP/19294-19344,50000-50100 + l7=discord,stun: fake-инжект для Discord/voice.
+# 6) TCP/2053,2083,2087,2096,8443 + discord.media: multisplit с seqovl=652 — Discord media-сервера на CF.
+# MODE_FILTER='autohostlist' (см. configure_zapret) даёт пакету авто-сборку доменов из ICMP-сбросов.
+# Тонкая настройка / smoke-test: /opt/zapret/blockcheck.sh.
+DEFAULT_NFQWS_OPT='--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-fake-tls=0x0F0F0F0F --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ggpht.com --dpi-desync-repeats=8 --dpi-desync-split-seqovl=620 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fooling=badsum,badseq --new
+--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt --dpi-desync=hostfakesplit --dpi-desync-fooling=badseq,badsum --dpi-desync-hostfakesplit-mod=host=mapgl.2gis.com --dpi-desync-badseq-increment=0 --new
+--filter-tcp=80 --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-repeats=6 --dpi-desync-fooling=badsum --new
+--filter-udp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin --new
+--filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --dpi-desync=fake --dpi-desync-repeats=6 --new
+--filter-tcp=2053,2083,2087,2096,8443 --hostlist-domains=discord.media --dpi-desync=multisplit --dpi-desync-split-seqovl=652 --dpi-desync-split-pos=2 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin'
 
 # --- CLI defaults ---
 VLESS_URL=""
@@ -124,7 +141,8 @@ Zapret:
 
 AdGuard Home:
   --no-adguard          Не устанавливать AGH.
-  --force-config        Перезаписать существующий AdGuardHome.yaml и nikki-профиль.
+  --force-config        Перезаписать существующий AdGuardHome.yaml и nikki-профиль,
+                        очистить $SETUP_STATE_FILE и прогнать все шаги заново.
 
 Прочее:
   --no-force-dns        Не добавлять firewall-правило Force DNS.
@@ -311,9 +329,76 @@ pkg_install_untrusted() {
     esac
 }
 
-# --- Step 1: preflight release + arch + pkg manager ---
+# --- idempotency state-file ---
+# Each long-running step calls should_skip_step at entry; if returns 0 — step
+# was completed in a prior run, skip. --force-config wipes the file so the
+# user can replay the full pipeline.
+state_check_done() {
+    [ -f "$SETUP_STATE_FILE" ] || return 1
+    grep -qE "^${1}=done\$" "$SETUP_STATE_FILE" 2>/dev/null
+}
+
+state_mark_done() {
+    _key="$1"
+    _tmp=$(mktemp) || die "mktemp failed"
+    if [ -f "$SETUP_STATE_FILE" ]; then
+        grep -vE "^${_key}=" "$SETUP_STATE_FILE" > "$_tmp" 2>/dev/null || :
+    fi
+    printf '%s=done\n' "$_key" >> "$_tmp"
+    mv "$_tmp" "$SETUP_STATE_FILE"
+}
+
+# Returns 0 if step already done AND --force-config NOT set → caller should skip.
+should_skip_step() {
+    [ "$FLAG_FORCE_CONFIG" -eq 1 ] && return 1
+    state_check_done "$1"
+}
+
+state_clear_all() {
+    [ -f "$SETUP_STATE_FILE" ] && rm -f "$SETUP_STATE_FILE"
+    return 0
+}
+
+# --- Step 1: первичная настройка best practice ---
+# Консервативные системные tweaks для чистого OpenWrt — выполняются один раз.
+# Не трогает hostname/timezone/password/wifi-country (user territory).
+setup_first_time() {
+    log "=== Step 1/16: Первичная настройка (best-practice) ==="
+    if should_skip_step step1_first_time; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
+
+    # 1) Less dmesg spam: stock OpenWrt 25.12 ships conloglevel=8 (info+),
+    #    that floods console+log on USB-tethered consoles.
+    uci -q set system.@system[0].conloglevel=4
+    uci -q commit system
+
+    # 2) Conntrack table: stock 16384 is too small for many-device LAN +
+    #    parallel mihomo/zapret connections. 65536 fits 256 MiB devices.
+    # 3) TCP Fast Open client+server.
+    # 4) BBR — only if module already loaded (don't force-install kmod).
+    # 5) Prefer RAM over USB-swap when memory is tight.
+    cat > /etc/sysctl.d/99-openwrt-setup.conf <<'EOF'
+# Generated by openwrt_script install.sh — first-time best-practice tweaks.
+net.netfilter.nf_conntrack_max = 65536
+net.ipv4.tcp_fastopen = 3
+vm.swappiness = 10
+EOF
+    if [ -d /sys/module/tcp_bbr ] || lsmod 2>/dev/null | grep -q '^tcp_bbr'; then
+        printf 'net.ipv4.tcp_congestion_control = bbr\n' >> /etc/sysctl.d/99-openwrt-setup.conf
+        log "BBR detected → enabled"
+    fi
+    sysctl -p /etc/sysctl.d/99-openwrt-setup.conf >/dev/null 2>&1 || \
+        warn "sysctl -p вернул ошибку (возможно отдельные ключи не поддержаны ядром)"
+
+    state_mark_done step1_first_time
+    log "Первичная настройка применена (conloglevel=4, conntrack=65536, TFO=3, swappiness=10)"
+}
+
+# --- Step 2: preflight release + arch + pkg manager ---
 preflight_release() {
-    log "=== Step 1/12: Preflight — OpenWrt release + architecture + pkg manager ==="
+    log "=== Step 2/16: Preflight — OpenWrt release + architecture + pkg manager ==="
     [ "$(id -u)" -eq 0 ] || refuse "Требуются права root"
     [ -f /etc/openwrt_release ] || refuse "Это не OpenWrt (нет /etc/openwrt_release)"
 
@@ -357,7 +442,7 @@ preflight_release() {
 
 # --- Step 2: extroot + swap ---
 preflight_extroot() {
-    log "=== Step 2/12: Preflight — extroot + swap ==="
+    log "=== Step 3/16: Preflight — extroot + swap ==="
 
     # /overlay должен быть на отдельном блочном устройстве: если остался на
     # rootfs_data (внутренний NAND/NOR), место кончится при первой же установке.
@@ -383,11 +468,18 @@ preflight_extroot() {
 
 # --- Step 3: conflict probes ---
 preflight_conflicts() {
-    log "=== Step 3/12: Preflight — conflict probes ==="
+    log "=== Step 4/16: Preflight — conflict probes ==="
     _conflicts=""
 
+    # mihomo/adguardhome — наши процессы, если предыдущий шаг install уже
+    # выполнен. Без этой проверки повторный запуск install.sh для добавления
+    # новых шагов (idempotency) всегда падал бы с "мы уже запустили mihomo".
     for _proc in xray sing-box mihomo adguardhome v2ray hysteria; do
         if pidof "$_proc" >/dev/null 2>&1; then
+            case "$_proc" in
+                mihomo)      state_check_done step8_nikki && continue ;;
+                adguardhome) state_check_done step10_adguard && continue ;;
+            esac
             _conflicts="${_conflicts}
   - запущен процесс: $_proc"
         fi
@@ -441,7 +533,7 @@ preflight_conflicts() {
 
 # --- Step 4: collect + parse + validate VLESS params ---
 collect_vless_input() {
-    log "=== Step 4/12: Сбор и разбор VLESS URL ==="
+    log "=== Step 5/16: Сбор и разбор VLESS URL ==="
 
     if [ -z "$VLESS_URL" ]; then
         # Full-override режим: если хоть одно поле задано флагом — URL не нужен.
@@ -537,7 +629,7 @@ collect_vless_input() {
 
 # --- Step 5: snapshot state ---
 snapshot_state() {
-    log "=== Step 5/12: Pre-install state snapshot ==="
+    log "=== Step 6/16: Pre-install state snapshot ==="
     umask 077
     mkdir -p "$BACKUP_DIR"
     # chmod 700 — snapshot.env содержит старые UCI-значения, в т.ч. возможные
@@ -595,11 +687,16 @@ EOF
 
 # --- Step 6: base packages ---
 install_base_packages() {
-    log "=== Step 6/12: Установка базовых пакетов ($PKG_MANAGER) ==="
+    log "=== Step 7/16: Установка базовых пакетов ($PKG_MANAGER) ==="
+    if should_skip_step step7_base_packages; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
     pkg_update 2>&1 | tail -5 || warn "$PKG_MANAGER update вернул предупреждения"
     pkg_install curl ca-bundle block-mount e2fsprogs kmod-fs-ext4 \
         kmod-usb-storage kmod-usb-storage-uas kmod-usb3 \
         || die "Ошибка $PKG_MANAGER install (базовые пакеты)"
+    state_mark_done step7_base_packages
 }
 
 # --- Step 7: nikki (mihomo) ---
@@ -623,13 +720,19 @@ try_fetch_script() {
 }
 
 install_nikki() {
-    log "=== Step 7/12: nikki (mihomo) ==="
+    log "=== Step 8/16: nikki (mihomo) ==="
+    if should_skip_step step8_nikki; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
     if install_nikki_via_feed; then
+        state_mark_done step8_nikki
         return 0
     fi
     warn "Основной feed недоступен (вероятно DPI-блок Cloudflare/pages.dev). Fallback → GitHub releases."
     install_nikki_via_github \
         || die "nikki: оба источника недоступны (upstream feed + GitHub releases)"
+    state_mark_done step8_nikki
 }
 
 install_nikki_via_feed() {
@@ -699,28 +802,143 @@ install_nikki_via_github() {
     log "nikki установлен из GitHub release ($_tag, arch=$DETECTED_ARCH, ow=$_ow_minor)"
 }
 
-# --- Step 8: zapret ---
+# --- Step 9: zapret ---
 install_zapret() {
-    [ "$FLAG_NO_ZAPRET" -eq 1 ] && { log "=== Step 8/12: zapret — пропущено (--no-zapret) ==="; return 0; }
-    log "=== Step 8/12: zapret (remittor) ==="
+    if [ "$FLAG_NO_ZAPRET" -eq 1 ]; then
+        log "=== Step 9/16: zapret — пропущено (--no-zapret) ==="
+        state_mark_done step9_zapret
+        return 0
+    fi
+    log "=== Step 9/16: zapret (remittor) ==="
+    if should_skip_step step9_zapret; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
     _zapret_script=$(fetch_script "$ZAPRET_INSTALLER_URL")
     log "Запуск remittor update-pkg.sh -u 1"
     sh "$_zapret_script" -u 1 || { rm -f "$_zapret_script"; die "remittor update-pkg.sh вернул ошибку"; }
     rm -f "$_zapret_script"
     [ -x /opt/zapret/nfq/nfqws ] || die "nfqws не найден после установки zapret (ожидался /opt/zapret/nfq/nfqws)"
+    state_mark_done step9_zapret
 }
 
-# --- Step 9: AdGuard Home ---
+# --- Step 10: AdGuard Home ---
 install_adguard() {
-    [ "$FLAG_NO_ADGUARD" -eq 1 ] && { log "=== Step 9/12: AdGuard Home — пропущено (--no-adguard) ==="; return 0; }
-    log "=== Step 9/12: AdGuard Home ==="
+    if [ "$FLAG_NO_ADGUARD" -eq 1 ]; then
+        log "=== Step 10/16: AdGuard Home — пропущено (--no-adguard) ==="
+        state_mark_done step10_adguard
+        return 0
+    fi
+    log "=== Step 10/16: AdGuard Home ==="
+    if should_skip_step step10_adguard; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
     pkg_install adguardhome || die "Ошибка $PKG_MANAGER install adguardhome"
     command -v AdGuardHome >/dev/null 2>&1 \
         || [ -x /usr/bin/AdGuardHome ] || [ -x /usr/sbin/AdGuardHome ] \
         || warn "Бинарник AdGuardHome не найден в PATH — пакет установлен, проверь службу"
+    state_mark_done step10_adguard
 }
 
-# --- Step 10: configure services ---
+# --- Step 11: Luci theme argon (jerrykuku) ---
+# argon НЕ публикуется в основных репозиториях OpenWrt — нужно тянуть с GitHub
+# releases. На 2026-04 jerrykuku публикует только .apk (для 25.x) — на opkg
+# (24.10.x) шаг пропускаем с предупреждением.
+ARGON_GH_API='https://api.github.com/repos/jerrykuku/luci-theme-argon/releases/latest'
+
+install_argon_theme() {
+    log "=== Step 11/16: Luci theme — argon ==="
+    if should_skip_step step11_argon; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
+    if [ "$PKG_MANAGER" != "apk" ]; then
+        warn "argon: GitHub-релизы публикуются только как .apk → пропуск для opkg ($PKG_MANAGER)"
+        state_mark_done step11_argon
+        return 0
+    fi
+    _meta=$(mktemp) || die "mktemp failed"
+    if ! curl -fsSL --max-time 30 --proto '=https' "$ARGON_GH_API" -o "$_meta" 2>/dev/null; then
+        rm -f "$_meta"
+        warn "argon: не удалось скачать metadata GitHub release → пропуск (не критично)"
+        return 0
+    fi
+    _url=$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+\.apk"' "$_meta" \
+        | grep -oE 'https://[^"]+' | head -1)
+    rm -f "$_meta"
+    [ -n "$_url" ] || { warn "argon: .apk не найден в release assets → пропуск"; return 0; }
+
+    _apk=$(mktemp).apk
+    if ! curl -fsSL --max-time 60 --proto '=https' "$_url" -o "$_apk"; then
+        rm -f "$_apk"
+        warn "argon: не удалось скачать $_url → пропуск"
+        return 0
+    fi
+    apk add --no-interactive --allow-untrusted "$_apk" \
+        || { rm -f "$_apk"; die "apk add argon вернул ошибку (см. logread)"; }
+    rm -f "$_apk"
+
+    uci -q set luci.main.mediaurlbase=/luci-static/argon
+    uci -q commit luci
+    log "Luci theme переключён на argon (источник: $_url)"
+    state_mark_done step11_argon
+}
+
+# --- Step 12: monitoring (luci-app-statistics + collectd) ---
+install_statistics() {
+    log "=== Step 12/16: Мониторинг (luci-app-statistics + collectd) ==="
+    if should_skip_step step12_statistics; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
+    pkg_install luci-app-statistics collectd \
+        collectd-mod-cpu collectd-mod-interface collectd-mod-iwinfo \
+        collectd-mod-load collectd-mod-memory collectd-mod-network \
+        collectd-mod-rrdtool collectd-mod-thermal collectd-mod-uptime \
+        rrdtool1 \
+        || die "Ошибка $PKG_MANAGER install luci-app-statistics/collectd"
+    [ "$FLAG_NO_I18N" -eq 0 ] && pkg_install luci-i18n-statistics-ru 2>/dev/null || :
+    log "luci-app-statistics + collectd установлены (графики: Luci → Statistics)"
+    state_mark_done step12_statistics
+}
+
+# --- Step 13: SQM (cake) ---
+# Bandwidth ОСТАЁТСЯ 0/0: установка по download/upload требует знания канала
+# конкретного провайдера/тарифа. Пользователь обязан задать через Luci → SQM
+# QoS, иначе шейпинг не активируется (sqm падает в no-op при 0/0).
+install_sqm_cake() {
+    log "=== Step 13/16: SQM QoS (cake) ==="
+    if should_skip_step step13_sqm; then
+        log "Уже выполнено (повторно: --force-config)"
+        return 0
+    fi
+    pkg_install luci-app-sqm sqm-scripts kmod-sched-cake \
+        || die "Ошибка $PKG_MANAGER install luci-app-sqm/sqm-scripts/kmod-sched-cake"
+    [ "$FLAG_NO_I18N" -eq 0 ] && pkg_install luci-i18n-sqm-ru 2>/dev/null || :
+
+    _wan_iface=$(uci -q get network.wan.device 2>/dev/null \
+        || uci -q get network.wan.ifname 2>/dev/null \
+        || echo wan)
+
+    # Idempotent: only seed default queue if user has no SQM config yet.
+    if ! uci -q get sqm.@queue[0].enabled >/dev/null 2>&1; then
+        uci -q add sqm queue >/dev/null
+    fi
+    uci -q set sqm.@queue[0].interface="$_wan_iface"
+    uci -q set sqm.@queue[0].qdisc=cake
+    uci -q set sqm.@queue[0].script=piece_of_cake.qos
+    uci -q set sqm.@queue[0].linklayer=ethernet
+    uci -q set sqm.@queue[0].overhead=44
+    uci -q set sqm.@queue[0].download=0
+    uci -q set sqm.@queue[0].upload=0
+    uci -q set sqm.@queue[0].enabled=0
+    uci -q commit sqm
+    warn "SQM конфигурирован, но disabled до задания download/upload через Luci → Network → SQM QoS"
+    state_mark_done step13_sqm
+}
+
+# --- Step 14: configure services ---
 configure_nikki() {
     log "--- Nikki profile + UCI ---"
     mkdir -p "$NIKKI_PROFILE_DIR"
@@ -752,6 +970,14 @@ dns:
     - 'time.*.com'
     - 'time.*.gov'
     - '*.ntp.org'
+    # RU/CIS зоны: возвращаем РЕАЛЬНЫЙ IP (через nameserver-policy → Yandex DoH).
+    # Без этого mihomo выдаёт fake-IP даже для DIRECT-доменов, и клиент стучится
+    # на 198.18.x.x вместо реального адреса (TLS обрывается, .ru сайты не открываются).
+    - '+.ru'
+    - '+.рф'
+    - '+.su'
+    - '+.by'
+    - '+.kz'
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
@@ -763,8 +989,8 @@ dns:
     - 8.8.8.8
   nameserver-policy:
     '+.ru,+.рф,+.su,+.by,+.kz':
-      - https://dns.yandex.ru/dns-query
-      - https://common.dot.dns.yandex.ru
+      - https://cloudflare-dns.com/dns-query
+      - https://1.1.1.1/dns-query
   nameserver:
     - https://dns.google/dns-query
     - https://cloudflare-dns.com/dns-query
@@ -850,17 +1076,31 @@ EOF
 configure_zapret() {
     [ "$FLAG_NO_ZAPRET" -eq 1 ] && return 0
     log "--- Zapret UCI ---"
+    # remittor/zapret-openwrt UCI keys — UPPERCASE (NFQWS_*, MODE_FILTER, DISABLE_IPV6).
+    # Lowercase (nfqws_opt, mode_filter) silently игнорируются пакетом → стартует
+    # дефолтная Strategy__v6_by_StressOzz, кастомная стратегия не применяется.
+    # Порты подобраны под NFQWS_OPT-секции: TCP 80/443 + Discord-CF (2053..8443),
+    # UDP 443 (QUIC) + Discord/STUN (19294-19344, 50000-50100).
+    # MODE_FILTER='autohostlist' — пакет авто-добавляет домены при ICMP-сбросах.
     uci -q batch <<EOF
 set zapret.config=zapret
-set zapret.config.enabled='1'
-set zapret.config.mode='nfqws'
-set zapret.config.mode_filter='hostlist'
-set zapret.config.nfqws_tcp_port='80,443'
-set zapret.config.nfqws_udp_port='443'
-set zapret.config.disable_ipv6='1'
+set zapret.config.run_on_boot='1'
+set zapret.config.NFQWS_ENABLE='1'
+set zapret.config.MODE_FILTER='autohostlist'
+set zapret.config.NFQWS_PORTS_TCP='80,443,2053,2083,2087,2096,8443'
+set zapret.config.NFQWS_PORTS_UDP='443,19294-19344,50000-50100'
+set zapret.config.DISABLE_IPV6='1'
 EOF
-    uci set zapret.config.nfqws_opt="$NFQWS_OPT"
+    uci set zapret.config.NFQWS_OPT="$NFQWS_OPT"
     uci commit zapret 2>/dev/null || warn "uci commit zapret — проверь схему в LuCI"
+
+    # 2-tier config: UCI → /opt/zapret/config через sync_config.sh. Без вызова
+    # NFQWS_OPT из UCI не доедет до runtime до следующей перезагрузки.
+    if [ -x /opt/zapret/sync_config.sh ]; then
+        sh /opt/zapret/sync_config.sh >/dev/null 2>&1 || warn "sync_config.sh fail — /opt/zapret/config возможно устарел"
+    else
+        warn "/opt/zapret/sync_config.sh отсутствует — NFQWS_OPT применится только после reboot"
+    fi
 
     mkdir -p "$(dirname "$ZAPRET_HOSTLIST")"
     cat > "$ZAPRET_HOSTLIST" <<'EOF'
@@ -910,9 +1150,9 @@ EOF
     if [ -n "$(uci -q get 'dhcp.@dnsmasq[0].server' 2>/dev/null)" ]; then
         warn "dhcp.@dnsmasq[0].server сбрасывается. Прежние — в snapshot.env"
     fi
-    uci -q del dhcp.@dnsmasq[0].server
-    uci -q del dhcp.lan.dhcp_option
-    uci -q del dhcp.lan.dns
+    uci -q del dhcp.@dnsmasq[0].server || :
+    uci -q del dhcp.lan.dhcp_option || :
+    uci -q del dhcp.lan.dns || :
     uci add_list dhcp.lan.dhcp_option="3,$LAN_IP"
     uci add_list dhcp.lan.dhcp_option="6,$LAN_IP"
     uci add_list dhcp.lan.dhcp_option="15,lan"
@@ -1129,7 +1369,7 @@ fix_service_order() {
 }
 
 enable_and_start_services() {
-    log "=== Step 11/12: Enable + start services ==="
+    log "=== Step 15/16: Enable + start services ==="
     if [ -x /etc/init.d/nikki ]; then
         /etc/init.d/nikki enable 2>/dev/null || :
         /etc/init.d/nikki restart || warn "nikki restart вернул ошибку — logread"
@@ -1142,13 +1382,20 @@ enable_and_start_services() {
         /etc/init.d/zapret enable 2>/dev/null || :
         /etc/init.d/zapret restart || warn "zapret restart — logread"
     fi
+    # collectd собирает RRD-метрики для luci-app-statistics. SQM не стартуем
+    # автоматически: bandwidth=0 → шейпинг не активируется, сервис стартует
+    # вхолостую. Пользователь включит после задания download/upload.
+    if [ -x /etc/init.d/collectd ]; then
+        /etc/init.d/collectd enable 2>/dev/null || :
+        /etc/init.d/collectd restart || warn "collectd restart — logread"
+    fi
     # 3 сек на привязку сокетов перед self-test'ом.
     sleep 3
 }
 
 # --- Step 12: self-test ---
 selftest() {
-    log "=== Step 12/12: Self-test ==="
+    log "=== Step 16/16: Self-test ==="
     _fail=0
     _report=""
 
@@ -1212,6 +1459,21 @@ selftest() {
             sh -c 'uci show firewall | grep -q "name=.Force DNS."'
     fi
 
+    # Best-practice / extras (опциональные — non-fatal в self-test).
+    if state_check_done step1_first_time; then
+        _check "sysctl tweaks file present" \
+            test -f /etc/sysctl.d/99-openwrt-setup.conf
+    fi
+    if state_check_done step11_argon; then
+        # SC2016: single quotes intentional — uci/$(...) must run inside `sh -c`.
+        # shellcheck disable=SC2016
+        _check "Luci theme = argon" \
+            sh -c '[ "$(uci -q get luci.main.mediaurlbase)" = "/luci-static/argon" ]'
+    fi
+    if state_check_done step12_statistics; then
+        _check "collectd running" pidof collectd
+    fi
+
     printf '[install.sh] Self-test:%s\n' "$_report" >&2
 
     [ "$_fail" -eq 0 ] || die "Self-test: $_fail проверок провалено. См. logread и README."
@@ -1233,12 +1495,21 @@ print_summary() {
      service zapret stop
      /opt/zapret/blockcheck.sh   # 10–20 минут подбора
      → обновить NFQWS_OPT в LuCI → Services → Zapret
+  3. SQM QoS (cake): задать download/upload (Кбит/с) и включить:
+     LuCI → Network → SQM QoS → Basic Settings → Download/Upload speed
+     Замер канала: speedtest-cli или https://www.speedtest.net (берите 80–95% от замера).
+  4. Графики: LuCI → Statistics (collectd собирает RRD; первые точки через 1-2 минуты).
+  5. Тема LuCI переключена на argon. Сменить обратно: uci set luci.main.mediaurlbase=/luci-static/bootstrap
 
 Проверка с клиента LAN:
   nslookup youtube.com ${_lan_ip}     # fake-IP 198.18.x.x (mihomo)
   nslookup yandex.ru ${_lan_ip}       # реальный IP
   curl https://ifconfig.me            # IP VPS, если идёт в PROXY
   curl https://yandex.ru/internet     # ваш домашний IP
+
+Идемпотентность: state-файл $SETUP_STATE_FILE содержит выполненные шаги.
+При повторном запуске install.sh пропускает их. --force-config очищает state и
+прогоняет всё заново.
 
 Откат: sh uninstall.sh
 Backup: ${BACKUP_DIR}/
@@ -1248,6 +1519,9 @@ EOF
 
 main() {
     parse_args "$@"
+    # --force-config wipes prior step-state so the full pipeline replays.
+    [ "$FLAG_FORCE_CONFIG" -eq 1 ] && state_clear_all
+    setup_first_time
     preflight_release
     preflight_extroot
     preflight_conflicts
@@ -1257,7 +1531,10 @@ main() {
     install_nikki
     install_zapret
     install_adguard
-    log "=== Step 10/12: Конфигурация сервисов ==="
+    install_argon_theme
+    install_statistics
+    install_sqm_cake
+    log "=== Step 14/16: Конфигурация сервисов ==="
     configure_nikki
     configure_zapret
     migrate_dnsmasq_to_agh
