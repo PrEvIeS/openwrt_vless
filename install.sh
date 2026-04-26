@@ -8,12 +8,12 @@ set -eu
 BACKUP_DIR=/root/openwrt-mihomo-backup
 SNAPSHOT_FILE=$BACKUP_DIR/snapshot.env
 
-NIKKI_PROFILE_DIR=/etc/nikki/run/profiles
+NIKKI_PROFILE_DIR=/etc/nikki/profiles
 NIKKI_PROFILE_NAME=main
 NIKKI_PROFILE_FILE=$NIKKI_PROFILE_DIR/$NIKKI_PROFILE_NAME.yaml
 
-AGH_DIR=/opt/adguardhome
-AGH_CONF=$AGH_DIR/AdGuardHome.yaml
+AGH_DIR=/etc/adguardhome
+AGH_CONF=$AGH_DIR/adguardhome.yaml
 
 ZAPRET_HOSTLIST=/opt/zapret/ipset/zapret-hosts-user.txt
 
@@ -36,6 +36,11 @@ PKG_MANAGER=""   # apk | opkg
 # Remote scripts we execute with `sh` — pinned URLs (SEC).
 NIKKI_FEED_URL='https://github.com/nikkinikki-org/OpenWrt-nikki/raw/refs/heads/main/feed.sh'
 ZAPRET_INSTALLER_URL='https://raw.githubusercontent.com/remittor/zapret-openwrt/zap1/zapret/update-pkg.sh'
+
+# Fallback for nikki when upstream feed (Cloudflare Pages) is DPI-blocked.
+# GitHub releases ship ready-to-install .apk files in per-arch tarballs.
+NIKKI_GH_API='https://api.github.com/repos/nikkinikki-org/OpenWrt-nikki/releases/latest'
+NIKKI_GH_DL='https://github.com/nikkinikki-org/OpenWrt-nikki/releases/download'
 
 # Starting NFQWS strategy. May need per-ISP tuning via /opt/zapret/blockcheck.sh.
 DEFAULT_NFQWS_OPT='--filter-tcp=80 --dpi-desync=fake,multisplit --dpi-desync-fooling=md5sig <HOSTLIST> --new
@@ -607,11 +612,31 @@ fetch_script() {
     printf '%s' "$_out"
 }
 
+# Soft fetch: stdout=temp path on success, return 1 on failure (no die).
+try_fetch_script() {
+    _url="$1"
+    _out=$(mktemp)
+    curl -fsSL --max-time 60 --proto '=https' --proto-redir '=https' "$_url" -o "$_out" 2>/dev/null \
+        || { rm -f "$_out"; return 1; }
+    [ -s "$_out" ] || { rm -f "$_out"; return 1; }
+    printf '%s' "$_out"
+}
+
 install_nikki() {
     log "=== Step 7/12: nikki (mihomo) ==="
-    _feed_script=$(fetch_script "$NIKKI_FEED_URL")
+    if install_nikki_via_feed; then
+        return 0
+    fi
+    warn "Основной feed недоступен (вероятно DPI-блок Cloudflare/pages.dev). Fallback → GitHub releases."
+    install_nikki_via_github \
+        || die "nikki: оба источника недоступны (upstream feed + GitHub releases)"
+}
+
+install_nikki_via_feed() {
+    _feed_script=$(try_fetch_script "$NIKKI_FEED_URL") \
+        || { warn "fetch feed.sh не удался ($NIKKI_FEED_URL)"; return 1; }
     log "Запуск nikki feed.sh (добавляет репозиторий $PKG_MANAGER)"
-    ash "$_feed_script" || { rm -f "$_feed_script"; die "nikki feed.sh вернул ошибку (возможно, $PKG_MANAGER не поддержан upstream'ом)"; }
+    ash "$_feed_script" || { rm -f "$_feed_script"; warn "nikki feed.sh вернул ошибку"; return 1; }
     rm -f "$_feed_script"
 
     pkg_update 2>&1 | tail -5 || warn "$PKG_MANAGER update после добавления nikki feed"
@@ -619,8 +644,59 @@ install_nikki() {
     [ "$FLAG_NO_I18N" -eq 0 ] && _nikki_pkgs="$_nikki_pkgs luci-i18n-nikki-ru"
     # shellcheck disable=SC2086
     pkg_install_untrusted $_nikki_pkgs \
-        || die "Ошибка установки nikki (подпись feed'а или отсутствие пакетов под $PKG_MANAGER)"
-    log "nikki установлен: $_nikki_pkgs"
+        || { warn "pkg_install_untrusted nikki не удался (фид недоступен)"; return 1; }
+    log "nikki установлен через feed: $_nikki_pkgs"
+}
+
+# Fallback: качаем готовый .apk-tarball из GitHub releases (apk-only, 25.x).
+install_nikki_via_github() {
+    [ "$PKG_MANAGER" = "apk" ] \
+        || { warn "GitHub-fallback поддержан только для apk (OpenWrt 25.x)"; return 1; }
+
+    _ow_minor=$(printf '%s' "$DETECTED_RELEASE" | awk -F. '{ if (NF>=2) printf "%s.%s", $1, $2 }')
+    [ -n "$_ow_minor" ] \
+        || { warn "Не определён DETECTED_RELEASE для GitHub-fallback"; return 1; }
+
+    _tag=$(curl -fsSL --max-time 30 "$NIKKI_GH_API" 2>/dev/null \
+        | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$_tag" ] \
+        || { warn "GitHub API не вернул tag_name ($NIKKI_GH_API)"; return 1; }
+
+    _url="${NIKKI_GH_DL}/${_tag}/nikki_${DETECTED_ARCH}-openwrt-${_ow_minor}.tar.gz"
+    log "GitHub-fallback: $_tag, tarball=$_url"
+
+    _tarball=$(mktemp)
+    _stage=$(mktemp -d)
+    curl -fsSL --max-time 180 "$_url" -o "$_tarball" \
+        || { warn "Не скачался $_url"; rm -f "$_tarball"; rm -rf "$_stage"; return 1; }
+    [ -s "$_tarball" ] \
+        || { warn "Пустой tarball $_url"; rm -f "$_tarball"; rm -rf "$_stage"; return 1; }
+    tar -xzf "$_tarball" -C "$_stage" \
+        || { warn "tar -xzf не распаковал $_tarball"; rm -f "$_tarball"; rm -rf "$_stage"; return 1; }
+    rm -f "$_tarball"
+
+    # Соберём список .apk через позиционные параметры (POSIX-safe glob).
+    set -- "$_stage"/nikki-*.apk
+    [ -f "$1" ] \
+        || { warn "В тарболе нет nikki-*.apk"; rm -rf "$_stage"; return 1; }
+    set -- "$@" "$_stage"/luci-app-nikki-*.apk
+    [ -f "$2" ] \
+        || { warn "В тарболе нет luci-app-nikki-*.apk"; rm -rf "$_stage"; return 1; }
+
+    if [ "$FLAG_NO_I18N" -eq 0 ]; then
+        if ls "$_stage"/luci-i18n-nikki-ru-*.apk >/dev/null 2>&1; then
+            set -- "$@" "$_stage"/luci-i18n-nikki-ru-*.apk
+        else
+            warn "luci-i18n-nikki-ru-*.apk не найден в тарболе — i18n пропущена"
+        fi
+    fi
+
+    apk add --no-interactive --allow-untrusted "$@"
+    _rc=$?
+    rm -rf "$_stage"
+    [ "$_rc" -eq 0 ] \
+        || { warn "apk add из GitHub release завершился с rc=$_rc"; return 1; }
+    log "nikki установлен из GitHub release ($_tag, arch=$DETECTED_ARCH, ow=$_ow_minor)"
 }
 
 # --- Step 8: zapret ---
@@ -631,7 +707,7 @@ install_zapret() {
     log "Запуск remittor update-pkg.sh -u 1"
     sh "$_zapret_script" -u 1 || { rm -f "$_zapret_script"; die "remittor update-pkg.sh вернул ошибку"; }
     rm -f "$_zapret_script"
-    command -v nfqws >/dev/null 2>&1 || die "nfqws не найден после установки zapret"
+    [ -x /opt/zapret/nfq/nfqws ] || die "nfqws не найден после установки zapret (ожидался /opt/zapret/nfq/nfqws)"
 }
 
 # --- Step 9: AdGuard Home ---
@@ -677,6 +753,12 @@ dns:
     - 'time.*.gov'
     - '*.ntp.org'
   default-nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  # Резолв адреса VLESS-сервера: без прокси, plain-UDP. DoH-эндпоинты часто
+  # блокируются DPI на RU ISP — bootstrap должен идти plain-UDP, иначе mihomo
+  # никогда не разрезолвит хост и тоннель не поднимется.
+  proxy-server-nameserver:
     - 1.1.1.1
     - 8.8.8.8
   nameserver-policy:
@@ -758,7 +840,9 @@ EOF
     # баланс TCP/UDP для слабых CPU (TProxy TCP + TUN для UDP).
     uci -q set nikki.config=nikki 2>/dev/null || uci -q add nikki nikki >/dev/null 2>&1 || :
     uci set nikki.config.enabled='1'
-    uci set nikki.config.profile="$NIKKI_PROFILE_NAME"
+    # nikki init.d ожидает 'type:id', где type∈{file,subscription}. Только "main"
+    # silently провалится в "No profile/subscription selected" → mihomo не стартует.
+    uci set nikki.config.profile="file:${NIKKI_PROFILE_NAME}.yaml"
     uci set nikki.config.mode='redir_tun'
     uci commit nikki 2>/dev/null || warn "uci commit nikki — проверь схему пакета в LuCI"
 }
@@ -844,7 +928,9 @@ configure_adguard() {
     log "--- AdGuard Home config ---"
     mkdir -p "$AGH_DIR"
 
-    uci set adguardhome.config.workdir="$AGH_DIR" 2>/dev/null || :
+    # Пакет ставит config_file=/etc/adguardhome/adguardhome.yaml — пишем туда же.
+    # work_dir по умолчанию /var/lib/adguardhome — оставляем (там statistic, querylog).
+    uci set adguardhome.config.config_file="$AGH_CONF" 2>/dev/null || :
     uci commit adguardhome 2>/dev/null || :
 
     if [ -f "$AGH_CONF" ] && [ "$FLAG_FORCE_CONFIG" -ne 1 ]; then
