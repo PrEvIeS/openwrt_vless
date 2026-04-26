@@ -57,12 +57,16 @@ NIKKI_GH_DL='https://github.com/nikkinikki-org/OpenWrt-nikki/releases/download'
 # 6) TCP/2053,2083,2087,2096,8443 + discord.media: multisplit с seqovl=652 — Discord media-сервера на CF.
 # MODE_FILTER='autohostlist' (см. configure_zapret) даёт пакету авто-сборку доменов из ICMP-сбросов.
 # Тонкая настройка / smoke-test: /opt/zapret/blockcheck.sh.
-DEFAULT_NFQWS_OPT='--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-fake-tls=0x0F0F0F0F --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ggpht.com --dpi-desync-repeats=8 --dpi-desync-split-seqovl=620 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fooling=badsum,badseq --new
---filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt --dpi-desync=hostfakesplit --dpi-desync-fooling=badseq,badsum --dpi-desync-hostfakesplit-mod=host=mapgl.2gis.com --dpi-desync-badseq-increment=0 --new
---filter-tcp=80 --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-repeats=6 --dpi-desync-fooling=badsum --new
---filter-udp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin --new
---filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --dpi-desync=fake --dpi-desync-repeats=6 --new
---filter-tcp=2053,2083,2087,2096,8443 --hostlist-domains=discord.media --dpi-desync=multisplit --dpi-desync-split-seqovl=652 --dpi-desync-split-pos=2 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin'
+# UCI обрезает значения по первому \n при `uci set`. Старая реализация хранила
+# NFQWS_OPT многострочной — в UCI попадал ТОЛЬКО filter 1, остальные блоки
+# (Discord-CF, hostfakesplit, QUIC, voice) никогда не доезжали до runtime.
+# Собираем строкой с пробелами: --new — самодостаточный разделитель в argv nfqws.
+DEFAULT_NFQWS_OPT='--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-fake-tls=0x0F0F0F0F --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ggpht.com --dpi-desync-repeats=8 --dpi-desync-split-seqovl=620 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fooling=badsum,badseq --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt --dpi-desync=hostfakesplit --dpi-desync-fooling=badseq,badsum --dpi-desync-hostfakesplit-mod=host=mapgl.2gis.com --dpi-desync-badseq-increment=0 --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=80 --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-repeats=6 --dpi-desync-fooling=badsum --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-udp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --dpi-desync=fake --dpi-desync-repeats=6 --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=2053,2083,2087,2096,8443 --hostlist-domains=discord.media --dpi-desync=multisplit --dpi-desync-split-seqovl=652 --dpi-desync-split-pos=2 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin'
 
 # --- CLI defaults ---
 VLESS_URL=""
@@ -1070,7 +1074,54 @@ EOF
     # silently провалится в "No profile/subscription selected" → mihomo не стартует.
     uci set nikki.config.profile="file:${NIKKI_PROFILE_NAME}.yaml"
     uci set nikki.config.mode='redir_tun'
+
+    # /etc/nikki/ucode/mixin.uc на каждом старте мерджит UCI nikki.mixin.* поверх
+    # YAML-профиля. Пакетные дефолты ломают нашу схему:
+    #   * dns_listen='[::]:1053' → mihomo биндит dual-stack v6, UDP-ответы AGH
+    #     теряются (TCP/1053 отвечает, UDP/1053 — i/o timeout 20s).
+    #   * dns_ipv6='1', ipv6='1' → AAAA-резолв через DoH без поднятого тоннеля
+    #     стопорит pipeline.
+    #   * api_listen='[::]:9090' → external-controller на v6.
+    #   * redir_port/tproxy_port — у пакета swap'нуты относительно нашего профиля.
+    # Прибиваем UCI к profile.
+    uci set nikki.mixin.ipv6='0'
+    uci set nikki.mixin.dns_listen='127.0.0.1:1053'
+    uci set nikki.mixin.dns_ipv6='0'
+    uci set nikki.mixin.api_listen='127.0.0.1:9090'
+    uci set nikki.mixin.redir_port='7892'
+    uci set nikki.mixin.tproxy_port='7891'
+
     uci commit nikki 2>/dev/null || warn "uci commit nikki — проверь схему пакета в LuCI"
+
+    # mihomo с auto-route:false ставит на TUN только /30 (kernel-link от 198.18.0.1/16).
+    # Локальные процессы вне cgroup-redirect (AGH в services/adguardhome bypass'нут
+    # из router_redirect chain → нет fwmark 0x81 → main route table) при попытке
+    # достучаться до fake-IP вне /30 (например 198.18.0.85, 198.18.0.154) уходят
+    # по default → WAN → drop. Симптом: AGH filter update "dial tcp 198.18.0.X:443:
+    # connect: connection timed out". Лечим /16 в main table — kernel events для
+    # nikki TUN в /etc/hotplug.d/net/.
+    cat > /etc/hotplug.d/net/30-nikki-fakeip <<'EOF'
+#!/bin/sh
+# Добавляет 198.18.0.0/16 dev nikki в main table при поднятии TUN.
+# Без этого AGH (bypass'нут в router_redirect cgroup) не достучится до fake-IP.
+[ "$INTERFACE" = "nikki" ] || exit 0
+case "$ACTION" in
+    add)
+        # ip route replace идемпотентен; ждём пока IP назначится
+        for _i in 1 2 3 4 5; do
+            ip -4 addr show dev nikki 2>/dev/null | grep -q 'inet ' && break
+            sleep 1
+        done
+        ip route replace 198.18.0.0/16 dev nikki 2>/dev/null
+        ;;
+esac
+EOF
+    chmod 755 /etc/hotplug.d/net/30-nikki-fakeip
+
+    # Если nikki уже поднят (повторный прогон installer'а) — добавляем сразу.
+    if ip link show nikki >/dev/null 2>&1; then
+        ip route replace 198.18.0.0/16 dev nikki 2>/dev/null || :
+    fi
 }
 
 configure_zapret() {
@@ -1102,18 +1153,57 @@ EOF
         warn "/opt/zapret/sync_config.sh отсутствует — NFQWS_OPT применится только после reboot"
     fi
 
+    # zapret-hosts-user.txt используется фильтрами 2 (TCP/443 hostfakesplit),
+    # 4 (UDP/443 QUIC fake) и пакетным MODE_FILTER='autohostlist'. Покрытие YouTube
+    # на TCP/443 идёт через пакетный zapret-hosts-google.txt (filter 1). user.txt —
+    # для не-Google ресурсов + UDP/443 (QUIC). Совпадения с zapret-hosts-user-exclude.txt
+    # (поставляется пакетом, содержит RU-сайты вроде gosuslugi/yandex/vk) исключаются
+    # nfqws автоматически — exclude > include. Источник для расширения — Flowseal:
+    # https://github.com/Flowseal/zapret-discord-youtube/tree/main/lists.
     mkdir -p "$(dirname "$ZAPRET_HOSTLIST")"
     cat > "$ZAPRET_HOSTLIST" <<'EOF'
+dis.gd
+discord-activities.com
+discord-attachments-uploads-prd.storage.googleapis.com
+discord.app
+discord.co
+discord.com
+discord.design
+discord.dev
+discord.gg
+discord.gift
+discord.gifts
+discord.media
+discord.new
+discord.status
+discord.store
+discordactivities.com
+discordapp.com
+discordapp.net
+discordcdn.com
+discordmerch.com
+discordpartygames.com
+discordsays.com
+discordsez.com
 youtube.com
+www.youtube.com
 googlevideo.com
-ytimg.com
-youtu.be
-ggpht.com
-yt3.ggpht.com
-yt4.ggpht.com
-googleapis.com
-gvt1.com
-gvt2.com
+x.com
+twitter.com
+rutracker.org
+rutracker.net
+nnmclub.to
+rutor.info
+openwrt.org
+instagram.com
+filmix.my
+epidemz.net.co
+ntc.party
+sxyprn.net
+spankbang.com
+pornhub.com
+gosuslugi.ru
+esia.gosuslugi.ru
 EOF
     log "zapret hostlist: $ZAPRET_HOSTLIST ($(wc -l < "$ZAPRET_HOSTLIST") записей)"
 }
