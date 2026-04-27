@@ -46,24 +46,30 @@ ZAPRET_INSTALLER_URL='https://raw.githubusercontent.com/remittor/zapret-openwrt/
 NIKKI_GH_API='https://api.github.com/repos/nikkinikki-org/OpenWrt-nikki/releases/latest'
 NIKKI_GH_DL='https://github.com/nikkinikki-org/OpenWrt-nikki/releases/download'
 
-# NFQWS-стратегия: 6 фильтр-секций (--new разделяет их).
-# 1) TCP/443 + Google-hostlist: fake,multisplit с TLS-fake-clienthello (ggpht.com SNI),
-#    split-seqovl=620 — пробивает SNI-фильтрацию на googlevideo/ytimg.
-# 2) TCP/443 + user-hostlist (минус exclude): hostfakesplit с подменой Host: на mapgl.2gis.com,
-#    badseq+badsum fooling — для произвольных DPI-блокировок.
-# 3) TCP/80: fake,multisplit для plain HTTP (без hostlist — на все исходящие).
-# 4) UDP/443 + user-hostlist: fake QUIC с готовым clienthello-бином из /opt/zapret/files/fake/.
-# 5) UDP/19294-19344,50000-50100 + l7=discord,stun: fake-инжект для Discord/voice.
-# 6) TCP/2053,2083,2087,2096,8443 + discord.media: multisplit с seqovl=652 — Discord media-сервера на CF.
+# NFQWS-стратегия: 7 фильтр-секций (--new разделяет их).
+# Запреты на combined-mode через запятую (procd unquoted argv разрезает `,` в
+# `--dpi-desync=fake,multisplit` и `--dpi-desync-fooling=badsum,badseq` на NUL —
+# второй mode становится позиционным и игнорится). См. memory
+# project_procd_comma_split_nfqws.md. Workaround: один mode на секцию + single fooling.
+# 1a) TCP/443 + Google-hostlist: fake с TLS-fake-clienthello (ggpht.com SNI), repeats=8.
+# 1b) TCP/443 + Google-hostlist: multisplit pos=2,sld + seqovl=620 + pattern — SNI-обход.
+#     Две секции на один матч: nfqws применяет фильтры независимо (по pkt N).
+# 2)  TCP/443 + user-hostlist (минус exclude): hostfakesplit с подменой Host: на mapgl.2gis.com,
+#     fooling=badseq — для произвольных DPI-блокировок.
+# 3)  TCP/80: multisplit для plain HTTP (без hostlist — на все исходящие).
+# 4)  UDP/443 + user-hostlist: fake QUIC с готовым clienthello-бином из /opt/zapret/files/fake/.
+# 5)  UDP/19294-19344,50000-50100 + l7=discord,stun: fake-инжект для Discord/voice.
+# 6)  TCP/2053,2083,2087,2096,8443 + discord.media: multisplit с seqovl=652 — Discord media-сервера на CF.
 # MODE_FILTER='autohostlist' (см. configure_zapret) даёт пакету авто-сборку доменов из ICMP-сбросов.
 # Тонкая настройка / smoke-test: /opt/zapret/blockcheck.sh.
 # UCI обрезает значения по первому \n при `uci set`. Старая реализация хранила
 # NFQWS_OPT многострочной — в UCI попадал ТОЛЬКО filter 1, остальные блоки
 # (Discord-CF, hostfakesplit, QUIC, voice) никогда не доезжали до runtime.
 # Собираем строкой с пробелами: --new — самодостаточный разделитель в argv nfqws.
-DEFAULT_NFQWS_OPT='--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-fake-tls=0x0F0F0F0F --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ggpht.com --dpi-desync-repeats=8 --dpi-desync-split-seqovl=620 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fooling=badsum,badseq --new '
-DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt --dpi-desync=hostfakesplit --dpi-desync-fooling=badseq,badsum --dpi-desync-hostfakesplit-mod=host=mapgl.2gis.com --dpi-desync-badseq-increment=0 --new '
-DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=80 --dpi-desync=fake,multisplit --dpi-desync-split-pos=2,sld --dpi-desync-repeats=6 --dpi-desync-fooling=badsum --new '
+DEFAULT_NFQWS_OPT='--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=fake --dpi-desync-fake-tls=0x0F0F0F0F --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ggpht.com --dpi-desync-repeats=8 --dpi-desync-fooling=badseq --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-google.txt --dpi-desync=multisplit --dpi-desync-split-pos=2,sld --dpi-desync-split-seqovl=620 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-repeats=8 --dpi-desync-fooling=badseq --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --hostlist-exclude=/opt/zapret/ipset/zapret-hosts-user-exclude.txt --dpi-desync=hostfakesplit --dpi-desync-fooling=badseq --dpi-desync-hostfakesplit-mod=host=mapgl.2gis.com --dpi-desync-badseq-increment=0 --new '
+DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=80 --dpi-desync=multisplit --dpi-desync-split-pos=2,sld --dpi-desync-repeats=6 --dpi-desync-fooling=badsum --new '
 DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-udp=443 --hostlist=/opt/zapret/ipset/zapret-hosts-user.txt --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-quic=/opt/zapret/files/fake/quic_initial_www_google_com.bin --new '
 DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --dpi-desync=fake --dpi-desync-repeats=6 --new '
 DEFAULT_NFQWS_OPT="$DEFAULT_NFQWS_OPT"'--filter-tcp=2053,2083,2087,2096,8443 --hostlist-domains=discord.media --dpi-desync=multisplit --dpi-desync-split-seqovl=652 --dpi-desync-split-pos=2 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin'
@@ -982,6 +988,18 @@ dns:
     - '+.su'
     - '+.by'
     - '+.kz'
+    # Яндекс-инфра живёт на .yandex.net и .yandex-net.ru: quasar/alice/uniproxy
+    # (Станция/Алиса), appmetrica, clck, scbh, s3.yandex.net. Без этих суффиксов
+    # mihomo шлёт API-вызовы Станции через VLESS → Яндекс геоблочит → приложение
+    # не грузится. .ru уже покрывает yandex.ru/mail.yandex.ru, но НЕ .net.
+    - '+.yandex.net'
+    - '+.yandex-net.ru'
+    # SmartTV YouTube: апп открывает соединение на реальный IP www.youtube.com
+    # для API/manifest-фазы и упирается в path-MTU (PMTUD-blackhole у RU ISP).
+    # Возвращаем real-IP, чтобы firewall MSS=88 clamp в /etc/nftables.d/ мог
+    # адресовать конкретные IP YouTube. Источник: Medium1992/mihomo-proxy-ros
+    # script21.rsc:149 (FAKE_IP_FILTER1=DOMAIN,www.youtube.com,real-ip).
+    - 'www.youtube.com'
   default-nameserver:
     - 1.1.1.1
     - 8.8.8.8
@@ -992,7 +1010,7 @@ dns:
     - 1.1.1.1
     - 8.8.8.8
   nameserver-policy:
-    '+.ru,+.рф,+.su,+.by,+.kz':
+    '+.ru,+.рф,+.su,+.by,+.kz,+.yandex.net,+.yandex-net.ru':
       - https://cloudflare-dns.com/dns-query
       - https://1.1.1.1/dns-query
   nameserver:
@@ -1028,14 +1046,16 @@ proxy-groups:
     type: select
     proxies: [VLESS-REALITY, DIRECT]
 
-rule-providers:
-  ru-blocked:
-    type: http
-    behavior: domain
-    format: text
-    url: "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-custom-routing-list/main/release/mihomo/ru-blocked.list"
-    path: ./rule-sets/ru-blocked.list
-    interval: 86400
+# Geosite/Geoip from runetfreedom: антифильтр-комьюнити + re:filter + v2fly
+# базовые категории (youtube/discord/etc уже включены, не теряются при свапе).
+# geodata-mode=true заставляет mihomo читать geoip.dat (а не дефолтную metadb).
+# Обновление каждые 24h. См. https://github.com/runetfreedom/russia-v2ray-rules-dat
+geodata-mode: true
+geo-auto-update: true
+geo-update-interval: 24
+geox-url:
+  geosite: "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geosite.dat"
+  geoip: "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geoip.dat"
 
 rules:
   - GEOIP,LAN,DIRECT,no-resolve
@@ -1052,12 +1072,21 @@ rules:
   - DOMAIN-SUFFIX,yt3.ggpht.com,YOUTUBE
   - DOMAIN-SUFFIX,yt4.ggpht.com,YOUTUBE
 
+  # RU-only сайты (Yandex/Kinopoisk/Okko/Wink/etc) → DIRECT.
+  # Покрывает .yandex.net (Алиса/Станция), kinopoisk-ru.clstorage.net,
+  # cdnvideo.ru и пр. CDN, которые НЕ матчатся +.ru ниже. Ставится ДО .ru,
+  # чтобы поймать .net/.com-домены русской инфры до GEOIP-фолбека.
+  - GEOSITE,ru-available-only-inside,DIRECT
+
   - DOMAIN-SUFFIX,ru,DIRECT
   - DOMAIN-SUFFIX,su,DIRECT
   - DOMAIN-SUFFIX,рф,DIRECT
   - GEOIP,RU,DIRECT
 
-  - RULE-SET,ru-blocked,PROXY
+  # Заблокированные в РФ домены (antifilter community + re:filter) → PROXY.
+  # Ставится ПОСЛЕ .ru/GEOIP RU, чтобы случайные RU-host-листы не утаскивали
+  # российский трафик в VLESS.
+  - GEOSITE,ru-blocked,PROXY
 
   - MATCH,FINAL
 EOF
@@ -1090,6 +1119,12 @@ EOF
     uci set nikki.mixin.api_listen='127.0.0.1:9090'
     uci set nikki.mixin.redir_port='7892'
     uci set nikki.mixin.tproxy_port='7891'
+    # outbound_interface → mixin.uc (line 14-21) ставит interface-name: <l3_device>.
+    # /etc/init.d/nikki:188 хардкодит auto-detect-interface=false через yq, и без
+    # явного interface-name mihomo при DIRECT-egress пытается выйти через сам TUN
+    # (`nikki`) → "reject loopback connection (match GeoIP/ru) ... 95.167.58.x".
+    # С 'wan' DIRECT биндится на pppoe-wan / eth-wan и доходит до апстрима.
+    uci set nikki.mixin.outbound_interface='wan'
 
     uci commit nikki 2>/dev/null || warn "uci commit nikki — проверь схему пакета в LuCI"
 
@@ -1122,6 +1157,31 @@ EOF
     if ip link show nikki >/dev/null 2>&1; then
         ip route replace 198.18.0.0/16 dev nikki 2>/dev/null || :
     fi
+
+    # Pre-download geosite.dat / geoip.dat для GEOSITE,ru-* + GEOIP,ru правил.
+    # Без файлов первый старт mihomo бесконечно фейлится: он пробует скачать сам,
+    # но в этот момент DNS ещё не поднят (chicken-and-egg, "dns resolve failed:
+    # ip version error"), и init-loop крутится без mihomo. raw.githubusercontent
+    # часто SERVFAIL'ится через 127.0.0.1 (AGH ходит вверх через mihomo, который
+    # ещё не запущен) — поэтому curl с --resolve на Fastly-IP'шниками обходит DNS.
+    # Идемпотентно: пропускаем если файл >1 MiB уже лежит.
+    _nikki_run=/etc/nikki/run
+    mkdir -p "$_nikki_run"
+    _gh_resolve='--resolve raw.githubusercontent.com:443:185.199.108.133 --resolve raw.githubusercontent.com:443:185.199.109.133 --resolve raw.githubusercontent.com:443:185.199.110.133 --resolve raw.githubusercontent.com:443:185.199.111.133'
+    for _f in geosite.dat geoip.dat; do
+        if [ -s "$_nikki_run/$_f" ] && [ "$(stat -c %s "$_nikki_run/$_f" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+            log "$_nikki_run/$_f уже есть (>1MiB) — пропускаю"
+            continue
+        fi
+        _url="https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/$_f"
+        log "Качаю $_f из runetfreedom"
+        if curl -fsSL --max-time 120 $_gh_resolve "$_url" -o "$_nikki_run/$_f.tmp"; then
+            mv "$_nikki_run/$_f.tmp" "$_nikki_run/$_f"
+        else
+            rm -f "$_nikki_run/$_f.tmp"
+            warn "Не удалось скачать $_f — mihomo попробует сам после поднятия DNS"
+        fi
+    done
 }
 
 configure_zapret() {
@@ -1455,6 +1515,104 @@ EOF
     log "Force DNS: lan:53 → $_lan_ip:53"
 }
 
+# SmartTV YouTube fix: TCP MSS=88 clamp на SYN-пакетах к реальным IP
+# www.youtube.com. Порт паттерна Medium1992/mihomo-proxy-ros (script21.rsc:236).
+# Зачем: SmartTV YT приложение упирается в path-MTU при ICMP-blackhole'ах ISP/
+# тоннеле (PMTUD не сходится). Static MSS=88 заставляет TV/mihomo слать мини-
+# сегменты, которые проходят через любой DPI/VLESS/прозрачный прокси.
+# Узко: только www.youtube.com (signaling/manifest). Видеопоток googlevideo.com
+# идёт через fake-IP→TPROXY→mihomo и MSS-клампом не покрыт — это намеренно
+# (slowdown пути streaming = скрытая регрессия).
+install_youtube_mss_clamp() {
+    log "--- YouTube MSS clamp (Medium1992 port) ---"
+
+    mkdir -p /usr/libexec/openwrt-vless
+
+    # Чистим старую (сломанную) реализацию через fw4 includes, если была.
+    rm -f /etc/nftables.d/30-youtube-set.nft /etc/nftables.d/30-youtube-mss-out.nft \
+          /etc/nftables.d/30-youtube-mss-fwd.nft /usr/libexec/openwrt-vless/youtube-mss-refresh.sh
+    _idx=0
+    while true; do
+        _p=$(uci -q get "firewall.@include[$_idx].path" 2>/dev/null) || break
+        case "$_p" in
+            /etc/nftables.d/30-youtube-*.nft|/usr/libexec/openwrt-vless/youtube-mss-refresh.sh)
+                uci -q delete "firewall.@include[$_idx]"; uci -q commit firewall; continue ;;
+        esac
+        _idx=$((_idx+1))
+    done
+
+    # Используем СОБСТВЕННУЮ nft-таблицу `inet yt_mss` (не fw4): fw4 chain-pre
+    # includes падают syntax-error на rule-фрагментах в `output`, а свой table
+    # переживает любые fw4 reload без потерь. Idempotent: add table/set/chain
+    # без flush, ловим duplicate тихо. Резолвер пополняет set с timeout 1d,
+    # ротация IP YouTube авто-чистится через TTL.
+    cat > /usr/libexec/openwrt-vless/youtube-mss.sh <<'SH_EOF'
+#!/bin/sh
+# Idempotent loader+refresh для inet yt_mss/youtube_v4. Гарантирует наличие
+# table/set/chain/rule, затем резолвит www.youtube.com через локальный AGH и
+# добавляет real-IP в set. AGH с fake-ip-filter www.youtube.com отдаёт реальные
+# IP (Medium1992 паттерн: только signaling, не googlevideo.com).
+set -u
+LAN_IP="$(uci -q get network.lan.ipaddr || echo 192.168.1.1)"
+
+# Создаём структуру если её нет. Все add-команды по-одной чтобы duplicate в
+# одной не блокировал последующие.
+nft 'add table inet yt_mss' 2>/dev/null || :
+nft 'add set inet yt_mss youtube_v4 { type ipv4_addr; timeout 1d; flags timeout; }' 2>/dev/null || :
+nft 'add chain inet yt_mss output { type filter hook output priority mangle; policy accept; }' 2>/dev/null || :
+# Правило: SYN на YT-real-IP:443 → MSS=88. Добавляем только если пусто
+# (избегаем дублей при повторных вызовах).
+if ! nft list chain inet yt_mss output 2>/dev/null | grep -q YT_MSS; then
+    nft 'add rule inet yt_mss output ip daddr @youtube_v4 tcp dport 443 tcp flags syn tcp option maxseg size set 88 counter comment "YT_MSS"' 2>/dev/null || \
+        logger -t yt-mss "ERROR: add rule failed"
+fi
+
+# Резолвим. AGH busybox-nslookup-формат: "Address: 1.2.3.4". Фильтруем
+# приватные/loopback/fake-IP/0.x — реальный YT всегда в публичном Google AS.
+IPS=$(nslookup www.youtube.com "$LAN_IP" 2>/dev/null \
+    | awk '/^Address[: ]/ && $NF~/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $NF}' \
+    | grep -Ev '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.|198\.18\.|198\.19\.|0\.)' \
+    | sort -u)
+if [ -z "$IPS" ]; then
+    logger -t yt-mss "no real IPs for www.youtube.com via $LAN_IP (AGH down or fake-ip filter not applied)"
+    exit 0
+fi
+for IP in $IPS; do
+    nft add element inet yt_mss youtube_v4 "{ $IP }" 2>/dev/null || :
+done
+logger -t yt-mss "set youtube_v4 += $(echo "$IPS" | tr '\n' ' ')"
+SH_EOF
+    chmod +x /usr/libexec/openwrt-vless/youtube-mss.sh
+
+    # Procd init для bootstrap при reboot: один раз поднимает structure+резолв.
+    cat > /etc/init.d/yt-mss-clamp <<'INIT_EOF'
+#!/bin/sh /etc/rc.common
+START=95
+STOP=10
+boot() {
+    /usr/libexec/openwrt-vless/youtube-mss.sh 2>/dev/null || :
+}
+stop() {
+    nft 'delete table inet yt_mss' 2>/dev/null || :
+}
+INIT_EOF
+    chmod +x /etc/init.d/yt-mss-clamp
+    /etc/init.d/yt-mss-clamp enable 2>/dev/null || :
+
+    # Cron каждые 30 мин — догоняет ротацию IP YouTube между reboot'ами.
+    _cron='*/30 * * * * /usr/libexec/openwrt-vless/youtube-mss.sh'
+    ( crontab -l 2>/dev/null | grep -v 'youtube-mss' ; echo "$_cron" ) | crontab -
+    /etc/init.d/cron enable 2>/dev/null || :
+    /etc/init.d/cron restart 2>/dev/null || :
+
+    # Bootstrap сейчас. Если AGH ещё не поднят (мы перед enable_and_start_services),
+    # structure создастся, set останется пустым — cron заполнит после старта AGH.
+    /usr/libexec/openwrt-vless/youtube-mss.sh 2>/dev/null || \
+        log "yt-mss bootstrap: AGH не отвечает, structure создана, set заполнится по cron"
+
+    log "YT MSS clamp: inet yt_mss table + output:tcp/443 SYN→MSS=88, refresh /30min + boot"
+}
+
 # Порядок: nikki должен подняться раньше AGH, чтобы при первом форвард-запросе
 # AGH :53 → mihomo :1053 был доступен. Zapret — последним (сеть уже поднята).
 fix_service_order() {
@@ -1646,6 +1804,7 @@ main() {
     migrate_dnsmasq_to_agh
     configure_adguard
     install_dns_interception
+    install_youtube_mss_clamp
     fix_service_order
     enable_and_start_services
     selftest
