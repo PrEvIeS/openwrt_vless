@@ -95,6 +95,29 @@ Routing rules in mihomo profile (first match wins):
 
 ---
 
+## Routing rule lists (runetfreedom)
+
+Source: [runetfreedom/russia-v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat), `release` branch — community-curated v2fly-format `geosite.dat` + `geoip.dat`, refreshed daily by upstream CI from antifilter + re:filter.
+
+| geosite category | Routes to | Coverage |
+|---|---|---|
+| `ru-available-only-inside` | `DIRECT` (before `.ru` / GEOIP) | RU-only services: Yandex / Kinopoisk / Okko / Wink, CDN domains `.yandex.net`, `cdnvideo.ru`, `kinopoisk-ru.clstorage.net` — `.com`/`.net` of Russian infra not caught by `.ru` TLD. |
+| `ru-blocked` | `PROXY` → VLESS-Reality (after `.ru` / GEOIP) | Domains blocked in RU — antifilter + re:filter (~10⁴ entries). |
+| `geoip:RU` | `DIRECT` | IP-block fallback. |
+
+Files live in `/etc/nikki/run/{geosite,geoip}.dat` (~66 + ~21 MiB). Auto-update every 24h via `geo-update-interval`. Force refresh without restart:
+
+```sh
+SECRET=$(uci get nikki.mixin.api_secret)
+curl -X POST -H "Authorization: Bearer $SECRET" http://127.0.0.1:9090/configs/geo
+```
+
+To use a different rules repo, edit `geox-url` in `/etc/nikki/profiles/main.yaml`. v2fly-format protobuf is required (Xray / sing-box format is binary-compatible).
+
+Note: `runetfreedom/russia-v2ray-custom-routing-list` is **not** what we use — that repo doesn't ship a mihomo-compatible build (`release/mihomo/*.list` URLs return 404).
+
+---
+
 ## IPv6 behavior
 
 The installer targets **IPv4-only routing**. What this means in practice:

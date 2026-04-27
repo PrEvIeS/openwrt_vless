@@ -192,6 +192,80 @@ sh install.sh \
 
 ---
 
+## Списки правил (runetfreedom)
+
+Источник правил — [runetfreedom/russia-v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat) (ветка `release`). Курируемые v2fly-формат `geosite.dat` и `geoip.dat`, обновляются по CI поверх антифильтра + re:filter.
+
+**Не путать** с `runetfreedom/russia-v2ray-custom-routing-list` — там mihomo-формата нет, HTTP rule-provider URL вида `release/mihomo/ru-blocked.list` отдаёт 404.
+
+### Используемые категории
+
+| Категория geosite | Куда направляется | Что покрывает |
+|---|---|---|
+| `ru-available-only-inside` | **DIRECT** (порядок правил — до `.ru`/GEOIP) | RU-only сервисы: Яндекс/Кинопоиск/Okko/Wink, CDN-домены `.yandex.net`, `cdnvideo.ru`, `kinopoisk-ru.clstorage.net` и пр. — `.com`/`.net`-домены русской инфры, которые не ловятся фильтром по TLD `.ru`. |
+| `ru-blocked` | **PROXY → VLESS-Reality → VPS** (после `.ru`/GEOIP, чтобы не утянуть RU-host-листы в туннель) | Заблокированные в РФ домены — антифильтр + re:filter (~10⁴ записей, обновляется ежедневно). |
+| `geoip:RU` | **DIRECT** | IP-блок для фолбека, когда домен не сматчился ни одним из выше. |
+
+Остальные v2fly-категории (`cn`, `private`, `youtube`, `discord`, `telegram`) присутствуют в `geosite.dat`, но в нашем профиле не используются — наш роутинг построен на доменных suffix-list для YouTube + GEOSITE для RU.
+
+### Конфиг mihomo
+
+```yaml
+geodata-mode: true            # читать geoip.dat вместо встроенной metadb
+geo-auto-update: true
+geo-update-interval: 24       # каждые 24 часа
+geox-url:
+  geosite: "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geosite.dat"
+  geoip:   "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geoip.dat"
+```
+
+### Где лежат файлы
+
+| Путь | Что |
+|---|---|
+| `/etc/nikki/run/geosite.dat` | ~66 MiB на 2026-04 |
+| `/etc/nikki/run/geoip.dat` | ~21 MiB на 2026-04 |
+
+### Bootstrap (chicken-and-egg)
+
+Первый старт mihomo не может скачать данные сам: его DNS (`127.0.0.1:1053`) ещё не слушает, а резолв `raw.githubusercontent.com` идёт через сам mihomo. Поэтому шаг 13a `install.sh` делает pre-download через `curl --resolve` (4 IP-адреса fastly + amazonaws хардкоженные) до старта nikki. Без этого mihomo стартует с пустыми правилами и весь GEOSITE/GEOIP-роутинг просто не работает.
+
+### Авто-обновление
+
+Каждые 24 часа (`geo-update-interval`) mihomo тянет свежие `geosite.dat` / `geoip.dat` поверх существующих. На время скачивания старые правила продолжают применяться. Если обновление упало (offline/блок), mihomo логирует ошибку, но не крэшится.
+
+Принудительное обновление без рестарта:
+
+```sh
+SECRET=$(uci get nikki.mixin.api_secret)   # 132019
+curl -X POST -H "Authorization: Bearer $SECRET" \
+     http://127.0.0.1:9090/configs/geo
+```
+
+### Ручное обновление файлов
+
+```sh
+service nikki stop
+cd /etc/nikki/run
+curl -fsSL -o geosite.dat https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geosite.dat
+curl -fsSL -o geoip.dat   https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geoip.dat
+service nikki start
+```
+
+### Свой источник правил
+
+Если нужен другой репозиторий (или собственный fork с дополнительными доменами), переписать `geox-url` в `/etc/nikki/profiles/main.yaml`:
+
+```yaml
+geox-url:
+  geosite: "https://your-host/geosite.dat"
+  geoip:   "https://your-host/geoip.dat"
+```
+
+После правки — `service nikki restart`. URL должен отдавать v2fly-format protobuf (Xray/sing-box формат тоже подходит — это бинарно-совместимо).
+
+---
+
 ## Файлы и места изменений
 
 | Путь | Что содержит | В snapshot? | Восстанавливается `uninstall.sh`? |
