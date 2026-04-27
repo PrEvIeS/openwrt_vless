@@ -14,6 +14,8 @@ POSIX-shell unit tests for `install.sh` internals. Sources `install.sh` with `IN
 | `test_urldecode.sh` | Unit tests for `_urldecode()` — `%XX` decoding + `+` → space conversion (URL fragments). |
 | `test_state_file.sh` | Idempotency state-file primitives — write/read of `/etc/openwrt-setup-state` markers (uses tmp dir override). |
 | `test_parse_args.sh` | CLI flag parsing. Asserts override priority, `--no-adguard` without `--no-force-dns` → refuse, unknown flag → exit 2. |
+| `test_agh_bind_port.sh` | `_get_agh_bind_port()` — preserves operator-edited AGH `bind_port` across `--force-config` runs. |
+| `test_preflight_release.sh` | Fixture harness for `preflight_release()`. Uses `OPENWRT_RELEASE_FILE`/`MEMINFO_FILE` env overrides + tmp PATH dir with `apk`/`id` shims. Iterates `fixtures/preflight/release/*.env` against `fixtures/preflight/meminfo/*.txt`. |
 
 ## Subdirectories
 
@@ -48,6 +50,7 @@ Exit 0 = all pass, non-zero = any failure.
 
 - Partial assertions: `*.expect` lists only the keys the test cares about — extra globals in `install.sh` after parse are ignored.
 - `_dump()` helper pattern: subshell + `set` to capture globals after a function call without polluting the runner's environment.
+- **PATH shim** (`test_preflight_release.sh`): mock `apk`/`id` by writing 2-line scripts into `mktemp -d` and prepending it to `$PATH`. Lets host-side `pidof`/`apk`/root checks succeed without OpenWrt. Combine with env-var path overrides (e.g. `OPENWRT_RELEASE_FILE`) for filesystem fixtures.
 
 ## Dependencies
 

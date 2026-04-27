@@ -1,0 +1,8 @@
+MemTotal:          50000 kB
+MemFree:           20000 kB
+MemAvailable:      35000 kB
+Buffers:               0 kB
+Cached:            10000 kB
+SwapCached:            0 kB
+Active:            10000 kB
+Inactive:           8000 kB

@@ -21,6 +21,10 @@ ZAPRET_HOSTLIST=/opt/zapret/ipset/zapret-hosts-user.txt
 # Wiped on --force-config so the user can replay the full pipeline.
 SETUP_STATE_FILE=/etc/openwrt-setup-state
 
+# Overridable in tests/test_preflight_release.sh fixture harness.
+OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
+MEMINFO_FILE="${MEMINFO_FILE:-/proc/meminfo}"
+
 # Tested releases. Extend via env: SUPPORTED_RELEASES="25.12.3" sh install.sh
 SUPPORTED_RELEASES="${SUPPORTED_RELEASES:-24.10.0 24.10.1 24.10.2 25.04.0 25.12.0 25.12.1 25.12.2}"
 MIN_OVERLAY_KB=$((2 * 1024 * 1024))    # 2 GiB
@@ -419,10 +423,10 @@ EOF
 preflight_release() {
     log "=== Step 2/16: Preflight — OpenWrt release + architecture + pkg manager ==="
     [ "$(id -u)" -eq 0 ] || refuse "Требуются права root"
-    [ -f /etc/openwrt_release ] || refuse "Это не OpenWrt (нет /etc/openwrt_release)"
+    [ -f "$OPENWRT_RELEASE_FILE" ] || refuse "Это не OpenWrt (нет $OPENWRT_RELEASE_FILE)"
 
-    # shellcheck disable=SC1091
-    . /etc/openwrt_release
+    # shellcheck disable=SC1090
+    . "$OPENWRT_RELEASE_FILE"
     _release="${DISTRIB_RELEASE:-unknown}"
     _arch="${DISTRIB_ARCH:-unknown}"
     _target="${DISTRIB_TARGET:-unknown}"
@@ -452,7 +456,7 @@ preflight_release() {
 
     detect_pkg_manager
 
-    _ram_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    _ram_kb=$(awk '/^MemTotal:/{print $2}' "$MEMINFO_FILE" 2>/dev/null || echo 0)
     [ "$_ram_kb" -ge "$MIN_RAM_KB" ] \
         || refuse "Недостаточно RAM: ${_ram_kb} kB < ${MIN_RAM_KB} kB"
 

@@ -65,3 +65,7 @@ jobs:
         run: |
           sh   tests/test_agh_bind_port.sh
           dash tests/test_agh_bind_port.sh
+      - name: tests/test_preflight_release.sh — preflight_release fixture harness
+        run: |
+          sh   tests/test_preflight_release.sh
+          dash tests/test_preflight_release.sh
