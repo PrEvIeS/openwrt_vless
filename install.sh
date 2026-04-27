@@ -997,7 +997,7 @@ dns:
     - 'time.*.com'
     - 'time.*.gov'
     - '*.ntp.org'
-    # RU/CIS зоны: возвращаем РЕАЛЬНЫЙ IP (через nameserver-policy → Yandex DoH).
+    # RU/CIS зоны: возвращаем РЕАЛЬНЫЙ IP (через nameserver-policy → plain UDP).
     # Без этого mihomo выдаёт fake-IP даже для DIRECT-доменов, и клиент стучится
     # на 198.18.x.x вместо реального адреса (TLS обрывается, .ru сайты не открываются).
     - '+.ru'
@@ -1028,13 +1028,13 @@ dns:
     - 8.8.8.8
   nameserver-policy:
     '+.ru,+.рф,+.su,+.by,+.kz,+.yandex.net,+.yandex-net.ru':
-      - https://cloudflare-dns.com/dns-query
-      - https://1.1.1.1/dns-query
+      - 1.1.1.1
+      - 1.0.0.1
   nameserver:
-    - https://dns.google/dns-query
-    - https://cloudflare-dns.com/dns-query
+    - 1.1.1.1
+    - 8.8.8.8
   fallback:
-    - tls://dns.adguard-dns.com
+    - 8.8.4.4
 
 proxies:
   - name: "VLESS-REALITY"
