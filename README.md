@@ -60,20 +60,38 @@ Override priority: `--vless-*` CLI flag > URL value > fallback default.
 
 ---
 
-## 12-step pipeline
+## 16-step pipeline
 
+State-file `/etc/openwrt-setup-state` makes each step idempotent — re-running `install.sh` skips completed steps unless `--force-config` is passed.
+
+0. First-time setup (passwd / SSH key / TZ if not yet set)
 1. Preflight — release + architecture + package manager
 2. Preflight — extroot + swap
 3. Preflight — conflict probes (rival proxies, `:53` owner, LAN iface, internet)
 4. Collect and parse VLESS URL, validate fields
 5. Pre-install state snapshot at `/root/openwrt-mihomo-backup/` (chmod 700)
 6. Base packages (`curl`, `block-mount`, USB-storage kmods, …)
-7. `nikki` feed + mihomo packages
+7. `nikki` feed + mihomo packages (GitHub-releases fallback if feed DNS-blocked)
 8. `zapret` via `remittor/update-pkg.sh`
 9. `adguardhome`
-10. Configure profiles, move `dnsmasq` to `:54`, firewall redirect, service order
-11. Enable + start services (nikki → adguardhome → zapret)
-12. Self-test (ports, daemons, firewall rule)
+10. `luci-theme-argon`
+11. `luci-app-statistics` + collectd modules
+12. SQM cake (`luci-app-sqm` + `kmod-sched-cake`, queue defaults seeded only if absent)
+13. Configure: nikki profile + UCI mixin / zapret NFQWS / dnsmasq → `:54` / AGH upstream / Force-DNS DNAT
+14. Service order: `S50nikki → S60adguardhome → S99zapret`
+15. Enable + start
+16. Self-test (ports, daemons, firewall rule) + summary
+
+Routing rules in mihomo profile (first match wins):
+
+1. LAN / RFC1918 → `DIRECT`
+2. YouTube domain-suffix list → `YOUTUBE` selector (default `VLESS-REALITY`)
+3. `geosite:ru-available-only-inside` (yandex.net, kinopoisk-ru.clstorage, cdnvideo.ru …) → `DIRECT`
+4. `.ru` / `.рф` / `.su` / `geoip:RU` → `DIRECT`
+5. `geosite:ru-blocked` (runetfreedom antifilter + re:filter) → `PROXY`
+6. `MATCH` → `FINAL` selector (default `VLESS-REALITY`)
+
+`geosite.dat` / `geoip.dat` are pre-downloaded from [runetfreedom/v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat) before mihomo first start (chicken-and-egg: empty caches block startup DNS).
 
 ---
 
@@ -81,7 +99,7 @@ Override priority: `--vless-*` CLI flag > URL value > fallback default.
 
 The installer targets **IPv4-only routing**. What this means in practice:
 
-- **mihomo fake-IP** works only for A records. AAAA responses are passed through without fake-IP, so v6 destinations are not matched against the `ru-blocked.list` / YouTube / geoip rules.
+- **mihomo fake-IP** works only for A records. AAAA responses are passed through without fake-IP, so v6 destinations are not matched against the geosite / YouTube / geoip rules.
 - **zapret** is pinned to `disable_ipv6=1` in UCI, the nfqws hook only inspects v4 traffic.
 - **Force-DNS redirect** is v4 only (`ip nat` DNAT, no ip6nat rule).
 

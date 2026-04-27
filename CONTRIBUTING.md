@@ -79,12 +79,32 @@
 
 ## Testing
 
-Сейчас нет юнит-тестов (это в ROADMAP). Минимум — ручной прогон:
+Юнит-тесты (POSIX `sh` + `dash`, без зависимостей) лежат в `tests/`:
+
+| Скрипт | Покрытие |
+|---|---|
+| `tests/test_vless_url.sh` | `parse_vless_url()` через fixtures (`tests/fixtures/vless_urls/{valid,invalid}/*`) |
+| `tests/test_urldecode.sh` | `_urldecode()` — `+` → space, `%HH`, UTF-8, edge-cases |
+| `tests/test_state_file.sh` | `state_mark_done`/`state_check_done`/`should_skip_step`/`state_clear_all` |
+| `tests/test_parse_args.sh` | CLI-флаги, конфликт `--no-adguard` без `--no-force-dns`, exit codes |
+
+Локально перед PR:
+
+```sh
+shellcheck -s sh install.sh uninstall.sh
+sh -n install.sh && sh -n uninstall.sh
+sh   tests/test_vless_url.sh tests/test_urldecode.sh tests/test_state_file.sh tests/test_parse_args.sh
+dash tests/test_vless_url.sh tests/test_urldecode.sh tests/test_state_file.sh tests/test_parse_args.sh
+```
+
+CI (`.github/workflows/ci.yml`) гоняет всё это на каждый push/PR.
+
+End-to-end на реальном роутере (минимум — Netis N6 или Cudy TR3000 v1) если меняется pipeline:
 
 - `sh install.sh --non-interactive --vless-url '...'` на чистом образе.
 - `sh uninstall.sh` сразу после — проверить, что `opkg list-installed` /
   `apk info` вернулись к исходному набору, UCI-секции восстановлены.
-- Self-test pipeline (шаг 12) должен пройти без ручных действий кроме
+- Self-test pipeline (шаг 16) должен пройти без ручных действий кроме
   AGH wizard.
 
 Diff pre/post install:

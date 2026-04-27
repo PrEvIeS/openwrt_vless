@@ -206,6 +206,57 @@ service zapret stop
 # → сохранить, service zapret start
 ```
 
+### YouTube не работает на Smart TV (Yandex Station / Tizen / WebOS / Android TV)
+
+**Симптом:** на ПК через тот же роутер YouTube открывается, на Smart TV
+YT-app виснет на splash или вечный буфер. `mihomo /connections` показывает
+соединения от TV к `www.youtube.com:443` с `upload>0`, но `download=0`.
+
+**Причина:** mihomo `proxy-groups → YOUTUBE` selector выбирает `DIRECT`.
+RU ISP DPI обрывает TCP/443 к youtube.com на TLS handshake. Chrome на ПК
+работает потому что использует QUIC (UDP/443) — другой механизм блокировки.
+Smart TV YT-app — TCP-only без QUIC fallback, виснет.
+
+**Что делать:**
+
+Через mihomo HTTP API (без рестарта):
+```sh
+SECRET=$(uci get nikki.mixin.api_secret)
+curl -X PUT -H "Authorization: Bearer $SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"VLESS-REALITY"}' \
+     http://127.0.0.1:9090/proxies/YOUTUBE
+# дропнуть зависшие соединения
+curl -X DELETE -H "Authorization: Bearer $SECRET" \
+     http://127.0.0.1:9090/connections
+```
+
+Через профиль (persistent):
+```sh
+sed -i '/name: "YOUTUBE"/,/proxies:/ s/\[DIRECT, VLESS-REALITY\]/[VLESS-REALITY, DIRECT]/' \
+    /etc/nikki/profiles/main.yaml
+/etc/init.d/nikki restart
+```
+
+Свежие установки install.sh с 0.2.1+ имеют правильный default —
+`proxies: [VLESS-REALITY, DIRECT]`. Через UI mihomo (`http://router-ip:9090/ui/`)
+можно вручную тогглить YOUTUBE между VLESS и DIRECT, выбор сохраняется
+в `/etc/nikki/cache/cache.db` через рестарты.
+
+**Диагностика:**
+```sh
+SECRET=$(uci get nikki.mixin.api_secret)
+# Текущий selector группы
+curl -s -H "Authorization: Bearer $SECRET" \
+     http://127.0.0.1:9090/proxies/YOUTUBE | grep -oE '"now":"[^"]*"'
+# Соединения от конкретного клиента (подставь IP TV)
+curl -s -H "Authorization: Bearer $SECRET" \
+     http://127.0.0.1:9090/connections | tr ',' '\n' \
+   | grep -E '192\.168\.1\.<IP>|chains|host"|download'
+```
+Если `chains` содержит DIRECT и `download:0` — селектор группы и есть
+причина.
+
 ### AGH wizard не открывается на `:3000`
 
 **Причина:** порт занят, или bind только на LAN/loopback.

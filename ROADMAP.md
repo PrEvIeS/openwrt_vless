@@ -6,17 +6,30 @@
 
 ---
 
+## Done
+
+- **OpenWrt 25.04 / 25.12.x support.** apk/opkg детект, `SUPPORTED_RELEASES`
+  по умолчанию покрывает обе ветки. 24.10.x остаётся в списке для legacy.
+- **CI на GitHub Actions.** `shellcheck -s sh`, `dash -n` / `sh -n` syntax
+  smoke, юнит-тесты для `_urldecode` / VLESS URL parser / state-file /
+  parse_args (4 скрипта в `tests/`, ~65 проверок).
+- **VLESS URL parser в отдельной функции** с fixture-based тестами
+  (`tests/fixtures/vless_urls/{valid,invalid}/*`). Парсер вытащен из main
+  pipeline, протестирован на корректных и повреждённых URL.
+- **Idempotency state-file.** `/etc/openwrt-setup-state` маркирует
+  завершённые шаги; повторный запуск пропускает done-шаги, `--force-config`
+  делает полный пересев.
+
 ## Near-term
 
-- **OpenWrt 26.x support.** Расширить `SUPPORTED_RELEASES`, проверить apk/opkg
-  детект, прогнать все 12 шагов pipeline на чистом образе.
-- **CI.** `shellcheck -s sh` на install.sh + uninstall.sh, `sh -n` smoke-тест.
-  GitHub Actions, без deploy-пайплайна.
+- **OpenWrt 26.x support.** Расширить `SUPPORTED_RELEASES`, прогнать все
+  16 шагов pipeline на чистом образе после релиза.
 - **IPv6 policy.** Явно задокументировать и протестировать поведение: сейчас
   mihomo fake-IP работает только для v4, v6 идёт в обход. Минимум — README
-  с разбором, максимум — `--ipv6 {bypass,drop,route}` флаг.
-- **Preflight VLESS URL.** Вытащить parser в отдельную функцию с unit-тестами
-  на фикстурах (корректные + повреждённые URL).
+  с разбором (есть), максимум — `--ipv6 {bypass,drop,route}` флаг.
+- **Uninstall parity тест.** Сейчас self-test покрывает только установку.
+  Diff-based проверка возврата UCI/пакетов в исходное состояние после
+  `install.sh && uninstall.sh` — пока ручная.
 
 ## Mid-term
 
@@ -74,15 +87,16 @@
 
 ## Testing
 
-- **Матрица железа.** Netis N6 — reference, но нужен smoke-прогон на
-  минимум одном MIPS и одном ARMv7 роутере, чтобы ловить pkg-менеджер и
-  endianness-регрессии до релиза.
-- **Fixture-based preflight.** Набор подготовленных `.config`-файлов и
-  VLESS URL (валидные, битые, edge-case), прогоняемых через preflight
-  без реального роутера.
+- **Матрица железа.** Reference HW: Netis N6 (mt7621/MIPS) и Cudy TR3000 v1
+  (filogic/aarch64). Нужен smoke-прогон на минимум одном ARMv7 роутере,
+  чтобы ловить pkg-менеджер и endianness-регрессии до релиза.
+- **VLESS URL fixtures** — есть (`tests/fixtures/vless_urls/`). Расширить
+  invalid-набор edge-case'ами, найденными в реальных подписках (не-ASCII
+  fragment, multiple `=` в pbk, IPv6 в host).
 - **Uninstall parity.** Тест, гарантирующий, что `uninstall.sh` возвращает
   систему в состояние "до install.sh" по списку изменённых UCI-секций и
-  установленных пакетов. Diff-based, без ручной сверки.
+  установленных пакетов. Diff-based, без ручной сверки. Сейчас — ручной
+  `diff /tmp/uci.before /tmp/uci.after`.
 
 ## Release
 
