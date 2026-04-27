@@ -1,0 +1,1 @@
+vless://12345678-1234-1234-1234-123456789012@203.0.113.42:8443?type=tcp&security=reality&pbk=KEY&sni=cdn.example.org&sid=ABCD&flow=xtls-rprx-vision

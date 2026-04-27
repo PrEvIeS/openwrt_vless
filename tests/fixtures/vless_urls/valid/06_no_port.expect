@@ -1,0 +1,8 @@
+VLESS_UUID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+VLESS_SERVER=noport.example
+VLESS_PORT=443
+VLESS_PUBKEY=PBK
+VLESS_SNI=www.google.com
+VLESS_SID=BEEFCAFE
+VLESS_NETWORK=tcp
+VLESS_SECURITY=reality
