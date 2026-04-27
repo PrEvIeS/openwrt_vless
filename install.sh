@@ -908,7 +908,9 @@ install_statistics() {
         collectd-mod-rrdtool collectd-mod-thermal collectd-mod-uptime \
         rrdtool1 \
         || die "Ошибка $PKG_MANAGER install luci-app-statistics/collectd"
-    [ "$FLAG_NO_I18N" -eq 0 ] && pkg_install luci-i18n-statistics-ru 2>/dev/null || :
+    if [ "$FLAG_NO_I18N" -eq 0 ]; then
+        pkg_install luci-i18n-statistics-ru 2>/dev/null || :
+    fi
     log "luci-app-statistics + collectd установлены (графики: Luci → Statistics)"
     state_mark_done step12_statistics
 }
@@ -925,7 +927,9 @@ install_sqm_cake() {
     fi
     pkg_install luci-app-sqm sqm-scripts kmod-sched-cake \
         || die "Ошибка $PKG_MANAGER install luci-app-sqm/sqm-scripts/kmod-sched-cake"
-    [ "$FLAG_NO_I18N" -eq 0 ] && pkg_install luci-i18n-sqm-ru 2>/dev/null || :
+    if [ "$FLAG_NO_I18N" -eq 0 ]; then
+        pkg_install luci-i18n-sqm-ru 2>/dev/null || :
+    fi
 
     _wan_iface=$(uci -q get network.wan.device 2>/dev/null \
         || uci -q get network.wan.ifname 2>/dev/null \
@@ -1041,7 +1045,12 @@ proxy-groups:
     proxies: [VLESS-REALITY, DIRECT]
   - name: "YOUTUBE"
     type: select
-    proxies: [DIRECT, VLESS-REALITY]
+    # VLESS-REALITY первым: RU ISP DPI throttle-ит TCP/443 к youtube.com, и Smart
+    # TV YT-app (TCP-only, без QUIC fallback) виснет на TLS handshake. Chrome на
+    # ПК работает через DIRECT только потому что использует QUIC. Дефолт DIRECT
+    # ломал YouTube на любом TV/устройстве без QUIC. Selector сохраняет ручной
+    # toggle через UI/API для пользователей, у кого DIRECT работает.
+    proxies: [VLESS-REALITY, DIRECT]
   - name: "FINAL"
     type: select
     proxies: [VLESS-REALITY, DIRECT]
@@ -1175,6 +1184,8 @@ EOF
         fi
         _url="https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/$_f"
         log "Качаю $_f из runetfreedom"
+        # _gh_resolve — пробельный список из 4× --resolve, нужен word-split.
+        # shellcheck disable=SC2086
         if curl -fsSL --max-time 120 $_gh_resolve "$_url" -o "$_nikki_run/$_f.tmp"; then
             mv "$_nikki_run/$_f.tmp" "$_nikki_run/$_f"
         else
@@ -1515,104 +1526,6 @@ EOF
     log "Force DNS: lan:53 → $_lan_ip:53"
 }
 
-# SmartTV YouTube fix: TCP MSS=88 clamp на SYN-пакетах к реальным IP
-# www.youtube.com. Порт паттерна Medium1992/mihomo-proxy-ros (script21.rsc:236).
-# Зачем: SmartTV YT приложение упирается в path-MTU при ICMP-blackhole'ах ISP/
-# тоннеле (PMTUD не сходится). Static MSS=88 заставляет TV/mihomo слать мини-
-# сегменты, которые проходят через любой DPI/VLESS/прозрачный прокси.
-# Узко: только www.youtube.com (signaling/manifest). Видеопоток googlevideo.com
-# идёт через fake-IP→TPROXY→mihomo и MSS-клампом не покрыт — это намеренно
-# (slowdown пути streaming = скрытая регрессия).
-install_youtube_mss_clamp() {
-    log "--- YouTube MSS clamp (Medium1992 port) ---"
-
-    mkdir -p /usr/libexec/openwrt-vless
-
-    # Чистим старую (сломанную) реализацию через fw4 includes, если была.
-    rm -f /etc/nftables.d/30-youtube-set.nft /etc/nftables.d/30-youtube-mss-out.nft \
-          /etc/nftables.d/30-youtube-mss-fwd.nft /usr/libexec/openwrt-vless/youtube-mss-refresh.sh
-    _idx=0
-    while true; do
-        _p=$(uci -q get "firewall.@include[$_idx].path" 2>/dev/null) || break
-        case "$_p" in
-            /etc/nftables.d/30-youtube-*.nft|/usr/libexec/openwrt-vless/youtube-mss-refresh.sh)
-                uci -q delete "firewall.@include[$_idx]"; uci -q commit firewall; continue ;;
-        esac
-        _idx=$((_idx+1))
-    done
-
-    # Используем СОБСТВЕННУЮ nft-таблицу `inet yt_mss` (не fw4): fw4 chain-pre
-    # includes падают syntax-error на rule-фрагментах в `output`, а свой table
-    # переживает любые fw4 reload без потерь. Idempotent: add table/set/chain
-    # без flush, ловим duplicate тихо. Резолвер пополняет set с timeout 1d,
-    # ротация IP YouTube авто-чистится через TTL.
-    cat > /usr/libexec/openwrt-vless/youtube-mss.sh <<'SH_EOF'
-#!/bin/sh
-# Idempotent loader+refresh для inet yt_mss/youtube_v4. Гарантирует наличие
-# table/set/chain/rule, затем резолвит www.youtube.com через локальный AGH и
-# добавляет real-IP в set. AGH с fake-ip-filter www.youtube.com отдаёт реальные
-# IP (Medium1992 паттерн: только signaling, не googlevideo.com).
-set -u
-LAN_IP="$(uci -q get network.lan.ipaddr || echo 192.168.1.1)"
-
-# Создаём структуру если её нет. Все add-команды по-одной чтобы duplicate в
-# одной не блокировал последующие.
-nft 'add table inet yt_mss' 2>/dev/null || :
-nft 'add set inet yt_mss youtube_v4 { type ipv4_addr; timeout 1d; flags timeout; }' 2>/dev/null || :
-nft 'add chain inet yt_mss output { type filter hook output priority mangle; policy accept; }' 2>/dev/null || :
-# Правило: SYN на YT-real-IP:443 → MSS=88. Добавляем только если пусто
-# (избегаем дублей при повторных вызовах).
-if ! nft list chain inet yt_mss output 2>/dev/null | grep -q YT_MSS; then
-    nft 'add rule inet yt_mss output ip daddr @youtube_v4 tcp dport 443 tcp flags syn tcp option maxseg size set 88 counter comment "YT_MSS"' 2>/dev/null || \
-        logger -t yt-mss "ERROR: add rule failed"
-fi
-
-# Резолвим. AGH busybox-nslookup-формат: "Address: 1.2.3.4". Фильтруем
-# приватные/loopback/fake-IP/0.x — реальный YT всегда в публичном Google AS.
-IPS=$(nslookup www.youtube.com "$LAN_IP" 2>/dev/null \
-    | awk '/^Address[: ]/ && $NF~/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print $NF}' \
-    | grep -Ev '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.|198\.18\.|198\.19\.|0\.)' \
-    | sort -u)
-if [ -z "$IPS" ]; then
-    logger -t yt-mss "no real IPs for www.youtube.com via $LAN_IP (AGH down or fake-ip filter not applied)"
-    exit 0
-fi
-for IP in $IPS; do
-    nft add element inet yt_mss youtube_v4 "{ $IP }" 2>/dev/null || :
-done
-logger -t yt-mss "set youtube_v4 += $(echo "$IPS" | tr '\n' ' ')"
-SH_EOF
-    chmod +x /usr/libexec/openwrt-vless/youtube-mss.sh
-
-    # Procd init для bootstrap при reboot: один раз поднимает structure+резолв.
-    cat > /etc/init.d/yt-mss-clamp <<'INIT_EOF'
-#!/bin/sh /etc/rc.common
-START=95
-STOP=10
-boot() {
-    /usr/libexec/openwrt-vless/youtube-mss.sh 2>/dev/null || :
-}
-stop() {
-    nft 'delete table inet yt_mss' 2>/dev/null || :
-}
-INIT_EOF
-    chmod +x /etc/init.d/yt-mss-clamp
-    /etc/init.d/yt-mss-clamp enable 2>/dev/null || :
-
-    # Cron каждые 30 мин — догоняет ротацию IP YouTube между reboot'ами.
-    _cron='*/30 * * * * /usr/libexec/openwrt-vless/youtube-mss.sh'
-    ( crontab -l 2>/dev/null | grep -v 'youtube-mss' ; echo "$_cron" ) | crontab -
-    /etc/init.d/cron enable 2>/dev/null || :
-    /etc/init.d/cron restart 2>/dev/null || :
-
-    # Bootstrap сейчас. Если AGH ещё не поднят (мы перед enable_and_start_services),
-    # structure создастся, set останется пустым — cron заполнит после старта AGH.
-    /usr/libexec/openwrt-vless/youtube-mss.sh 2>/dev/null || \
-        log "yt-mss bootstrap: AGH не отвечает, structure создана, set заполнится по cron"
-
-    log "YT MSS clamp: inet yt_mss table + output:tcp/443 SYN→MSS=88, refresh /30min + boot"
-}
-
 # Порядок: nikki должен подняться раньше AGH, чтобы при первом форвард-запросе
 # AGH :53 → mihomo :1053 был доступен. Zapret — последним (сеть уже поднята).
 fix_service_order() {
@@ -1804,7 +1717,6 @@ main() {
     migrate_dnsmasq_to_agh
     configure_adguard
     install_dns_interception
-    install_youtube_mss_clamp
     fix_service_order
     enable_and_start_services
     selftest
