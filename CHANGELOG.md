@@ -14,6 +14,12 @@ Entries are written by hand per release tag. No commit-message autogeneration.
 
 ## [Unreleased]
 
+### Fixed
+- `install.sh` — `--force-config` больше не сбрасывает кастомный AGH
+  `bind_port`. `configure_adguard` читает существующий yaml перед перезаписью
+  и переносит порт оператора в новый файл (default `3000` для fresh install).
+  Покрыто `tests/test_agh_bind_port.sh` (7 cases). Beads `openwrt_script-3co`.
+
 ---
 
 ## [0.3.0] — 2026-04-27

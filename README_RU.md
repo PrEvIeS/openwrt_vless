@@ -149,7 +149,7 @@ sh install.sh \
 | `--no-adguard` | Не устанавливать AdGuard Home. |
 | `--no-force-dns` | Не добавлять firewall-правило Force DNS. |
 | `--no-i18n` | Не ставить `luci-i18n-nikki-ru`, `luci-i18n-statistics-ru`, `luci-i18n-sqm-ru`. |
-| `--force-config` | Перезаписать `AdGuardHome.yaml`, nikki-профиль, snapshot. **Сбрасывает `bind_port: 3000` в AGH** — если после первой установки admin был перенесён на `:8080` через wizard, после `--force-config` wizard снова поднимется на `:3000`. |
+| `--force-config` | Перезаписать `AdGuardHome.yaml`, nikki-профиль, snapshot. Кастомный `bind_port` AGH сохраняется (если уже выставлен через wizard); сбрасывается всё остальное — DNS upstreams, blocklists, тема. |
 | `--non-interactive` | Не промптить; без `--vless-url` или override'ов — die. |
 | `-h`, `--help` | Справка. |
 | env `SUPPORTED_RELEASES` / `SUPPORTED_ARCHES` | Расширить allowlist'ы. |

@@ -63,8 +63,6 @@
 
 ## Known limitations
 
-- `--force-config` пересевает `bind_port: 3000` в AdGuardHome.yaml — кастомный
-  админ-порт, выставленный через wizard, сбрасывается. См. README.
 - NFQWS_OPT для zapret — starting set. Для YouTube/SmartTV может требоваться
   ручная подстройка через `/opt/zapret/blockcheck.sh`.
 - `uninstall.sh` не трогает extroot и swap. Это намеренно.

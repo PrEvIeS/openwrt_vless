@@ -153,6 +153,7 @@ AdGuard Home:
   --no-adguard          Не устанавливать AGH.
   --force-config        Перезаписать существующий AdGuardHome.yaml и nikki-профиль,
                         очистить $SETUP_STATE_FILE и прогнать все шаги заново.
+                        Кастомный AGH bind_port сохраняется (если уже задан).
 
 Прочее:
   --no-force-dns        Не добавлять firewall-правило Force DNS.
@@ -240,6 +241,14 @@ _set_if_empty() {
     eval "_cur=\$$1"
     [ -n "$_cur" ] && return 0
     eval "$1=\"\$2\""
+}
+
+# Read AGH bind_port из yaml. Echoes numeric порт если найден и валиден; иначе
+# пусто. Используется configure_adguard чтобы --force-config не сбрасывал
+# кастомный порт оператора (см. beads openwrt_script-3co).
+_get_agh_bind_port() {
+    [ -f "$1" ] || return 0
+    awk '/^bind_port:[[:space:]]*[0-9]+/{print $2; exit}' "$1"
 }
 
 parse_vless_url() {
@@ -1355,12 +1364,27 @@ configure_adguard() {
         return 0
     fi
 
+    # Сохраняем bind_port оператора через --force-config: первый install ставит
+    # 3000 (wizard), оператор переносит на 8080 — повторный --force-config без
+    # этой логики возвращал :3000 (bd openwrt_script-3co).
+    agh_bind_port=3000
+    if [ -f "$AGH_CONF" ]; then
+        _existing=$(_get_agh_bind_port "$AGH_CONF")
+        case "$_existing" in
+            ''|*[!0-9]*) : ;;
+            *) agh_bind_port=$_existing
+               [ "$agh_bind_port" != 3000 ] && \
+                   log "Сохраняю существующий AdGuard Home bind_port: $agh_bind_port"
+               ;;
+        esac
+    fi
+
     # users=[] → AGH поднимает мастер на :3000 при первом заходе (BusyBox без
     # bcrypt, сгенерировать пароль заранее не можем). Остальное пре-сидим.
     _tmp=$(mktemp)
     cat > "$_tmp" <<EOF
 bind_host: 0.0.0.0
-bind_port: 3000
+bind_port: $agh_bind_port
 users: []
 auth_attempts: 5
 block_auth_min: 15
@@ -1490,7 +1514,7 @@ schema_version: 20
 EOF
     mv "$_tmp" "$AGH_CONF"
     chmod 600 "$AGH_CONF"
-    log "Записан $AGH_CONF (мастер: http://$LAN_IP:3000)"
+    log "Записан $AGH_CONF (мастер: http://$LAN_IP:$agh_bind_port)"
 }
 
 install_dns_interception() {

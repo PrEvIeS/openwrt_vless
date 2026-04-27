@@ -52,7 +52,7 @@ Override priority: `--vless-*` CLI flag > URL value > fallback default.
 | `--vless-server/port/uuid/pubkey/sid/sni/flow/fp` | Override individual fields |
 | `--nfqws-opt STR` | Custom zapret NFQWS strategy (default is a starting set, see `DEFAULT_NFQWS_OPT` in `install.sh`) |
 | `--no-zapret` / `--no-adguard` / `--no-force-dns` / `--no-i18n` | Skip a layer |
-| `--force-config` | Overwrite existing `AdGuardHome.yaml`, nikki profile and snapshot. Note: re-seeds AGH `bind_port: 3000`, so a custom admin port set earlier via the AGH wizard is reverted. |
+| `--force-config` | Overwrite existing `AdGuardHome.yaml`, nikki profile and snapshot. Operator's AGH `bind_port` is preserved across rewrites; everything else (DNS upstreams, blocklists, theme) is reset. |
 | `--non-interactive` | Fail instead of prompting |
 | `-h`, `--help` | Show usage |
 
