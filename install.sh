@@ -1416,10 +1416,13 @@ dns:
   ratelimit_whitelist: []
   refuse_any: true
   upstream_dns:
-    - "[/lan/]127.0.0.1:54"
+    # AGH WebUI валидатор требует явную схему для нестандартных портов
+    # (host:port без схемы принимается только для :53). Без udp:// сохранение
+    # из «Настройки → DNS» падает с «Сервер X: невозможно использовать».
+    - "[/lan/]udp://127.0.0.1:54"
     - "[/pool.ntp.org/]1.1.1.1"
     - "[/pool.ntp.org/]1.0.0.1"
-    - "127.0.0.1:1053"
+    - "udp://127.0.0.1:1053"
   upstream_dns_file: ""
   bootstrap_dns:
     - 1.1.1.1
@@ -1456,7 +1459,7 @@ dns:
   private_networks: []
   use_private_ptr_resolvers: true
   local_ptr_upstreams:
-    - 127.0.0.1:54
+    - udp://127.0.0.1:54
   use_dns64: false
   dns64_prefixes: []
   serve_http3: false
