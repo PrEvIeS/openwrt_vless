@@ -1036,6 +1036,17 @@ dns:
   fallback:
     - 8.8.4.4
 
+# Apple Private Relay + Apple/Firefox DoH canary kill. Apple-устройства иначе
+# уходят в DoH через mask*.icloud.com / dns.apple.com мимо нашего :53 DNAT.
+# use-application-dns.net — Mozilla DoH opt-out canary: возврат NXDOMAIN-эквивалента
+# отключает встроенный DoH в Firefox. Принцип взят из Medium1992/mihomo-proxy-ros.
+hosts:
+  'mask.icloud.com': 127.0.0.1
+  'mask-h2.icloud.com': 127.0.0.1
+  'doh.dns.apple.com': 127.0.0.1
+  'dns.apple.com': 127.0.0.1
+  'use-application-dns.net': 0.0.0.0
+
 proxies:
   - name: "VLESS-REALITY"
     type: vless
@@ -1444,7 +1455,7 @@ dns:
   cache_ttl_max: 0
   cache_optimistic: false
   bogus_nxdomain: []
-  aaaa_disabled: false
+  aaaa_disabled: true
   enable_dnssec: false
   edns_client_subnet:
     custom_ip: ""
@@ -1555,6 +1566,40 @@ EOF
     uci commit firewall
     service firewall reload 2>/dev/null || warn "firewall reload — проверь вручную"
     log "Force DNS: lan:53 → $_lan_ip:53"
+}
+
+# Force-DNS redirect выше — family='ipv4'. На dual-stack ISP клиент с IPv6 RA
+# может уйти на [2606:4700:4700::1111]:53 / [2001:4860:4860::8888]:53 мимо DNAT,
+# AGH+mihomo обходятся, fake-IP не выдаётся → DOMAIN-SUFFIX правила не срабатывают,
+# YouTube/etc уходят MATCH→FINAL вместо целевого селектора. Плюс на dual-stack
+# CGNAT (например ER-Telecom) IPv6-egress часто блокирует зарубежные ресурсы.
+# Гасим IPv6 на шлюзе целиком в шесть точек:
+#   * network.wan.ipv6=0          — PPPoE/DHCP клиент не торгует IPv6 IPCPv6
+#   * network.wan6.auto=0+disabled — DHCPv6-WAN не поднимается
+#   * network.globals.ula_prefix='' — LAN не раздаёт ULA
+#   * dhcp.lan.dhcpv6=disabled     — odhcpd не отдаёт DHCPv6 в LAN
+#   * dhcp.lan.ra=disabled+ra_slaac=0 — RA с RDNSS перестают анонсироваться
+# Только установить UCI: ifdown wan не дёргаем (рвёт SSH установщику). Применится
+# на следующем `/etc/init.d/network restart` или после ребута. AGH-yaml выше
+# уже выставлен с aaaa_disabled=true — глушит AAAA на стороне выдачи.
+harden_ipv6() {
+    log "--- IPv6 leak hardening ---"
+    if uci -q get network.wan >/dev/null 2>&1; then
+        uci set network.wan.ipv6='0'
+    fi
+    if uci -q get network.wan6 >/dev/null 2>&1; then
+        uci set network.wan6.auto='0'
+        uci set network.wan6.disabled='1'
+    fi
+    uci set network.globals.ula_prefix=''
+    uci commit network
+    if uci -q get dhcp.lan >/dev/null 2>&1; then
+        uci set dhcp.lan.dhcpv6='disabled'
+        uci set dhcp.lan.ra='disabled'
+        uci set dhcp.lan.ra_slaac='0'
+        uci commit dhcp
+    fi
+    log "wan.ipv6=0, wan6.auto=0/disabled=1, ula_prefix='', dhcp.lan v6 off (apply on network restart / reboot)"
 }
 
 # Порядок: nikki должен подняться раньше AGH, чтобы при первом форвард-запросе
@@ -1748,6 +1793,7 @@ main() {
     migrate_dnsmasq_to_agh
     configure_adguard
     install_dns_interception
+    harden_ipv6
     fix_service_order
     enable_and_start_services
     selftest
