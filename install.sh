@@ -1161,6 +1161,13 @@ EOF
 
     uci commit nikki 2>/dev/null || warn "uci commit nikki — проверь схему пакета в LuCI"
 
+    # nikki package шипит два router_access_control секции. Второй — catch-all
+    # без user/group/cgroup фильтра — захватывает root-side трафик в свой TUN,
+    # включая собственный outbound mihomo к VPS:port → loop → bvb /delay Timeout
+    # → PROXY группа мёртвая → MATCH→FINAL клиенты валятся. Disable [1], оставляя
+    # [0] (system bypass для services/agh/aria2). Memory: project_nikki_router_access_catchall_self_loop.
+    uci -q set nikki.@router_access_control[1].enabled='0' && uci commit nikki
+
     # mihomo с auto-route:false ставит на TUN только /30 (kernel-link от 198.18.0.1/16).
     # Локальные процессы вне cgroup-redirect (AGH в services/adguardhome bypass'нут
     # из router_redirect chain → нет fwmark 0x81 → main route table) при попытке
